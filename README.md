@@ -1,51 +1,64 @@
 # TributaSales
 
-Sistema de Gestão de Vendas – Parte 1, desenvolvido em HTML, CSS e JavaScript puro. A proposta combina a simplicidade esperada para um pequeno comerciante com uma interface inspirada em soluções brasileiras de gestão comercial e organização tributária.
+Sistema acadêmico de gestão de vendas. A Parte 2 evolui o baseline **v0.1.0** (Parte 1, HTML/CSS/JavaScript) para uma aplicação Node.js com Express, sem alterar a tag ou a release `v0.1.0`.
 
-## Problema e proposta
+## Evolução da Parte 1 para a Parte 2
 
-O pequeno comerciante muitas vezes controla produtos, descontos e entregas em anotações espalhadas. O TributaSales centraliza o catálogo, permite montar um pedido, aplica cupons e valida o endereço de entrega pelo CEP antes da finalização.
+O front-end aprovado continua disponível e mantém catálogo, busca, filtros, carrinho, cupons, calculadora e validação de CEP. Agora, quando aberto pelo servidor, o catálogo é carregado por `GET /api/produtos`, a finalização registra em `POST /api/pedidos` e a consulta de endereço usa `GET /api/cep/:cep`. Abrir `index.html` diretamente continua funcionando com os dados locais e a consulta pública do ViaCEP.
 
-## Funcionalidades implementadas
+## Implementações e ementa
 
-- Catálogo com produtos/serviços em array de objetos, categorias, busca e filtro.
-- Carrinho persistido no `localStorage`, alteração de quantidades e resumo de subtotal, desconto e total.
-- Calculadora independente com validação de valor e percentual.
-- Cupons demonstrativos: `PRIMEIRACOMPRA`, `CLIENTE10` e `PARCEIRO15`.
-- Consulta à API pública [ViaCEP](https://viacep.com.br/) com normalização, estados de carregamento e mensagens de erro.
-- Layout responsivo, acessível, sem dependências de backend ou pagamento real.
-- Finalizar pedido é uma simulação: exibe uma confirmação, não processa pagamento e mantém o carrinho salvo. `Limpar pedido` remove os itens e persiste o carrinho vazio.
+| Implementação | Relação com a ementa |
+| --- | --- |
+| `server/models.js` com `Produto`, `ProdutoServico`, `ProdutoLicenca` e `Pedido` | Classes, encapsulamento, herança e polimorfismo (`tipo` e `calcularValorBase`) |
+| `server/server.js` | Node.js, Express, rotas HTTP e integração com o cliente |
+| `server/storage.js` e `data/*.json` | Persistência assíncrona com `fs/promises` |
+| `server/cep-service.js` | Serviço externo assíncrono com `fetch` e `async/await` |
+| `server/cli.js` | Interface de linha de comando para cadastrar/listar produtos, calcular média e registrar pedidos |
+| `js/app.js` e `js/cep.js` | Consumo das APIs e preservação da experiência da Parte 1 |
+| Validações nos modelos e nas rotas | Validação de nome, preço, quantidade e CEP |
 
-## Estrutura
-
-```text
-TributaSales/
-├── index.html          # estrutura e conteúdo da interface
-├── css/style.css       # identidade visual e responsividade
-└── js/
-    ├── produtos.js     # fonte de dados do catálogo
-    ├── descontos.js    # regras de desconto e formatação monetária
-    ├── cep.js          # integração e validação do ViaCEP
-    └── app.js          # estado, eventos e renderização
-```
+A camada tributária permanece somente como fundação/simulação acadêmica. Não há alíquota legal fixa nem cálculo fiscal oficial; qualquer uso real deve ser definido com orientação contábil.
 
 ## Como executar
 
-1. Abra a pasta no VS Code.
-2. Execute `index.html` com a extensão Live Server (recomendado) ou abra o arquivo diretamente no navegador.
-3. Para testar o CEP, use, por exemplo, `01001-000`. A consulta depende de conexão com a internet.
+```bash
+npm install
+npm start
+```
 
-## Script de implementação acadêmica
+Acesse `http://localhost:3000`. A API mínima está disponível em:
 
-1. **Preparar:** criar a estrutura de pastas, definir o público-alvo e modelar `produtos` com `id`, nome, preço, categoria e descrição.
-2. **Construir a tela:** criar HTML semântico para hero, catálogo, pedido e ferramentas; aplicar CSS responsivo e identidade visual.
-3. **Renderizar dados:** implementar filtro por texto/categoria e gerar os cards com `map`, evitando valores fixos no HTML.
-4. **Calcular vendas:** criar funções puras para moeda e desconto; validar entradas, limitar o percentual a 100% e exibir subtotal, economia e total.
-5. **Gerenciar pedido:** implementar adicionar/remover/alterar quantidade, cupom, finalização simulada e persistência com `localStorage`.
-6. **Integrar serviço externo:** normalizar o CEP, chamar o endpoint ViaCEP com `fetch`, tratar HTTP, CEP inexistente e indisponibilidade da rede.
-7. **Validar:** testar catálogo vazio, filtros, valores inválidos, descontos de 0%/100%, CEP válido/inválido e atualização em telas pequenas.
-8. **Apresentar:** gravar até 3 minutos mostrando o problema, adicionar um produto, aplicar `PRIMEIRACOMPRA`, consultar o CEP e explicar a separação dos arquivos.
+- `GET/POST /api/produtos`
+- `GET /api/produtos/media`
+- `GET/POST /api/pedidos`
+- `GET /api/cep/:cep`
 
-## Evolução prática
+## CLI
 
-Como próxima etapa, o projeto pode receber cadastro de clientes, estoque, autenticação, banco de dados, emissão fiscal e regras tributárias parametrizadas. As informações tributárias devem ser confirmadas com um profissional contábil antes de uso operacional.
+Com o servidor parado ou em outro terminal:
+
+```bash
+npm run cli -- listar
+npm run cli -- media
+npm run cli -- cadastrar
+npm run cli -- pedido
+```
+
+Os dados são gravados em `data/produtos.json` e `data/pedidos.json`.
+
+## Estrutura da Parte 2
+
+```text
+TributaSales/
+├── index.html
+├── css/style.css
+├── js/                       # front-end da Parte 1 integrado à API
+├── data/produtos.json        # persistência do catálogo
+├── data/pedidos.json         # persistência dos pedidos
+├── server/models.js          # domínio, herança e polimorfismo
+├── server/storage.js         # fs/promises
+├── server/cep-service.js     # serviço assíncrono de CEP
+├── server/server.js          # Express
+└── server/cli.js             # CLI
+```

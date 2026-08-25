@@ -1,0 +1,14 @@
+{
+  "name": "tributasales",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Sistema acadêmico de gestão de vendas - TributaSales Parte 2",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "cli": "node server/cli.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

@@ -1,4 +1,4 @@
-const produtos = [
+let produtos = [
   { id: 1, nome: "Kit café especial", descricao: "Café torrado, filtro e caneca artesanal.", preco: 48.9, categoria: "Alimentos", destaque: true },
   { id: 2, nome: "Cesta café da manhã", descricao: "Seleção pronta para presentear ou compartilhar.", preco: 89.9, categoria: "Alimentos", destaque: true },
   { id: 3, nome: "Caneca artesanal", descricao: "Peça de cerâmica produzida por artesãos locais.", preco: 36.5, categoria: "Casa" },

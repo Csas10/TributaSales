@@ -60,7 +60,24 @@ function mostrarToast(mensagem) {
   setTimeout(() => toast.classList.remove("visible"), 2200);
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+async function carregarProdutos() {
+  if (window.location.protocol === "file:") return;
+  try {
+    const resposta = await fetch("/api/produtos");
+    if (!resposta.ok) {
+      mostrarToast("Não foi possível carregar o catálogo da API.");
+      return;
+    }
+    const dados = await resposta.json();
+    if (Array.isArray(dados)) produtos = dados;
+  } catch (erro) {
+    if (erro instanceof TypeError) mostrarToast("Servidor indisponível; catálogo local carregado.");
+    else mostrarToast("Resposta inválida da API; catálogo local não foi substituído.");
+  }
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  await carregarProdutos();
   [...new Set(produtos.map((produto) => produto.categoria))].sort().forEach((categoria) => el("filtro-categoria").insertAdjacentHTML("beforeend", `<option value="${categoria}">${categoria}</option>`));
   renderizarCatalogo(); renderizarCarrinho();
   el("busca").addEventListener("input", renderizarCatalogo);
@@ -69,8 +86,18 @@ document.addEventListener("DOMContentLoaded", () => {
   el("itens-carrinho").addEventListener("click", (event) => { const botao = event.target.closest("[data-quantity]"); if (!botao) return; const item = estado.carrinho.find((produto) => produto.id === Number(botao.dataset.quantity)); item.quantidade += Number(botao.dataset.change); if (item.quantidade <= 0) estado.carrinho = estado.carrinho.filter((produto) => produto.id !== item.id); salvarCarrinho(); renderizarCarrinho(); });
   el("limpar-carrinho").addEventListener("click", () => { estado.carrinho = []; estado.percentualDesconto = 0; salvarCarrinho(); renderizarCarrinho(); el("mensagem-desconto").textContent = ""; });
   el("aplicar-desconto").addEventListener("click", () => { const codigo = el("codigo-desconto").value.trim().toUpperCase(); const percentual = CUPONS[codigo]; if (percentual) estado.percentualDesconto = percentual; el("mensagem-desconto").textContent = percentual ? `Cupom aplicado: ${percentual}% de desconto.` : "Cupom inválido. O desconto vigente foi mantido."; el("mensagem-desconto").className = percentual ? "success" : "error"; atualizarResumo(); });
-  el("finalizar-pedido").addEventListener("click", () => { if (!estado.carrinho.length) return mostrarToast("Adicione pelo menos um item ao pedido."); mostrarToast("Pedido simulado com sucesso!"); });
+  el("finalizar-pedido").addEventListener("click", async () => {
+    if (!estado.carrinho.length) return mostrarToast("Adicione pelo menos um item ao pedido.");
+    if (window.location.protocol === "file:") return mostrarToast("Pedido simulado com sucesso!");
+    try {
+      const resposta = await fetch("/api/pedidos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ itens: estado.carrinho.map((item) => ({ produtoId: item.id, quantidade: item.quantidade })) }) });
+      if (!resposta.ok) throw new Error("Não foi possível registrar o pedido.");
+      mostrarToast("Pedido registrado com sucesso!");
+    } catch (erro) {
+      mostrarToast(erro.message);
+    }
+  });
   el("calcular-desconto").addEventListener("click", () => { try { const resultado = calcularValorComDesconto(el("valor").value, el("desconto").value); el("resultado-desconto").textContent = `Economia: ${moeda(resultado.desconto)} · Total: ${moeda(resultado.total)}`; el("resultado-desconto").className = "result success"; } catch (erro) { el("resultado-desconto").textContent = erro.message; el("resultado-desconto").className = "result error"; } });
-  el("cep").addEventListener("input", (event) => { const valor = normalizarCep(event.target.value); event.target.value = valor.length > 5 ? `${valor.slice(0, 5)}-${valor.slice(5)}` : valor; });
+  el("cep").addEventListener("input", (event) => { const valor = normalizarCep(event.target.value).slice(0, 8); event.target.value = valor.length > 5 ? `${valor.slice(0, 5)}-${valor.slice(5)}` : valor; });
   el("buscar-cep").addEventListener("click", async () => { const destino = el("endereco"); destino.textContent = "Consultando..."; destino.className = "address-result loading"; try { const dados = await buscarEnderecoPorCep(el("cep").value); destino.textContent = `${dados.logradouro || "Logradouro não informado"}, ${dados.bairro || "Bairro não informado"} · ${dados.localidade}/${dados.uf}`; destino.className = "address-result success"; } catch (erro) { destino.textContent = erro.message; destino.className = "address-result error"; } });
 });

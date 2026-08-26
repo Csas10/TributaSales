@@ -76,10 +76,134 @@ async function carregarProdutos() {
   }
 }
 
+let pedidos = [];
+let apiDisponivel = window.location.protocol !== "file:";
+
+async function requisicaoAPI(url, opcoes = {}) {
+  if (!apiDisponivel) throw new Error("Abra a aplicação pelo servidor para gerenciar registros.");
+  const resposta = await fetch(url, { headers: { "Content-Type": "application/json", ...(opcoes.headers || {}) }, ...opcoes });
+  let dados = null;
+  try { dados = await resposta.json(); } catch { /* respostas 204 não têm conteúdo */ }
+  if (!resposta.ok) throw new Error(dados?.erro || "Não foi possível concluir a operação.");
+  return dados;
+}
+
+function atualizarCategorias() {
+  const select = el("filtro-categoria");
+  const atual = select.value;
+  select.innerHTML = '<option value="Todos">Todas as categorias</option>';
+  [...new Set(produtos.map((produto) => produto.categoria))].sort().forEach((categoria) => select.insertAdjacentHTML("beforeend", `<option value="${categoria}">${categoria}</option>`));
+  select.value = [...select.options].some((option) => option.value === atual) ? atual : "Todos";
+}
+
+function preencherProdutosGestao() {
+  const select = el("pedido-produto");
+  if (!select) return;
+  select.innerHTML = produtos.map((produto) => `<option value="${produto.id}">${produto.nome} · ${moeda(produto.preco)}</option>`).join("");
+}
+
+function renderizarGestaoProdutos() {
+  const destino = el("gestao-produtos");
+  if (!destino) return;
+  destino.innerHTML = produtos.length ? produtos.map((produto) => `<div class="management-row"><div><strong>${produto.nome}</strong><small>${produto.categoria} · ${moeda(produto.preco)}</small></div><div class="row-actions"><button class="button button-ghost" data-editar-produto="${produto.id}" type="button">Editar</button><button class="button button-danger" data-excluir-produto="${produto.id}" type="button">Excluir</button></div></div>`).join("") : '<p class="empty-state">Nenhum produto cadastrado.</p>';
+}
+
+function renderizarGestaoPedidos() {
+  const destino = el("gestao-pedidos");
+  if (!destino) return;
+  destino.innerHTML = pedidos.length ? pedidos.map((pedido) => `<div class="management-row"><div><strong>Pedido #${pedido.id}</strong><small>${pedido.cliente || "Cliente não informado"} · ${moeda(pedido.total)}</small></div><div class="row-actions"><button class="button button-ghost" data-editar-pedido="${pedido.id}" type="button">Editar</button><button class="button button-danger" data-excluir-pedido="${pedido.id}" type="button">Excluir</button></div></div>`).join("") : '<p class="empty-state">Nenhum pedido registrado.</p>';
+}
+
+async function carregarGestao() {
+  if (!apiDisponivel) {
+    el("mensagem-gestao").textContent = "Inicie o servidor para criar, editar ou excluir registros.";
+    return;
+  }
+  try {
+    const [produtosApi, pedidosApi] = await Promise.all([requisicaoAPI("/api/produtos"), requisicaoAPI("/api/pedidos")]);
+    if (Array.isArray(produtosApi)) produtos = produtosApi;
+    if (Array.isArray(pedidosApi)) pedidos = pedidosApi;
+    atualizarCategorias(); preencherProdutosGestao(); renderizarCatalogo(); renderizarGestaoProdutos(); renderizarGestaoPedidos();
+    el("mensagem-gestao").textContent = "Produtos e pedidos sincronizados com a API.";
+  } catch (erro) {
+    el("mensagem-gestao").textContent = erro.message;
+    el("mensagem-gestao").className = "result error";
+  }
+}
+
+function limparFormularioProduto() {
+  el("form-produto").reset(); el("produto-id").value = ""; el("produto-categoria").value = "Geral";
+  el("titulo-form-produto").textContent = "Novo produto"; el("cancelar-produto").hidden = true;
+}
+
+function limparFormularioPedido() {
+  el("form-pedido").reset(); el("pedido-id").value = ""; el("pedido-quantidade").value = 1;
+  el("titulo-form-pedido").textContent = "Novo pedido"; el("cancelar-pedido").hidden = true;
+}
+
+function iniciarGestao() {
+  if (!el("form-produto")) return;
+  el("form-produto").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const id = el("produto-id").value;
+    const tipo = el("produto-tipo").value;
+    const payload = { nome: el("produto-nome").value, descricao: el("produto-descricao").value, preco: Number(el("produto-preco").value), categoria: el("produto-categoria").value, destaque: el("produto-destaque").checked };
+    if (tipo === "servico") payload.tipo = "Serviço";
+    if (tipo === "licenca") payload.tipo = "Licença";
+    try {
+      const salvo = await requisicaoAPI(id ? `/api/produtos/${id}` : "/api/produtos", { method: id ? "PUT" : "POST", body: JSON.stringify(payload) });
+      if (id) produtos = produtos.map((produto) => produto.id === Number(id) ? salvo : produto); else produtos.push(salvo);
+      atualizarCategorias(); preencherProdutosGestao(); renderizarCatalogo(); renderizarGestaoProdutos(); limparFormularioProduto(); mostrarToast("Produto salvo.");
+    } catch (erro) { el("mensagem-gestao").textContent = erro.message; el("mensagem-gestao").className = "result error"; }
+  });
+  el("form-pedido").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const id = el("pedido-id").value;
+    const payload = { cliente: el("pedido-cliente").value, cep: el("pedido-cep").value, itens: [{ produtoId: Number(el("pedido-produto").value), quantidade: Number(el("pedido-quantidade").value) }] };
+    try {
+      const salvo = await requisicaoAPI(id ? `/api/pedidos/${id}` : "/api/pedidos", { method: id ? "PUT" : "POST", body: JSON.stringify(payload) });
+      if (id) pedidos = pedidos.map((pedido) => pedido.id === Number(id) ? salvo : pedido); else pedidos.push(salvo);
+      renderizarGestaoPedidos(); limparFormularioPedido(); mostrarToast("Pedido salvo.");
+    } catch (erro) { el("mensagem-gestao").textContent = erro.message; el("mensagem-gestao").className = "result error"; }
+  });
+  el("cancelar-produto").addEventListener("click", limparFormularioProduto);
+  el("cancelar-pedido").addEventListener("click", limparFormularioPedido);
+  el("atualizar-gestao").addEventListener("click", carregarGestao);
+  el("gestao-produtos").addEventListener("click", async (event) => {
+    const editar = event.target.closest("[data-editar-produto]");
+    const excluir = event.target.closest("[data-excluir-produto]");
+    if (editar) {
+      const produto = produtos.find((item) => item.id === Number(editar.dataset.editarProduto));
+      if (!produto) return;
+      el("produto-id").value = produto.id; el("produto-nome").value = produto.nome; el("produto-descricao").value = produto.descricao || ""; el("produto-preco").value = produto.preco; el("produto-categoria").value = produto.categoria; el("produto-tipo").value = produto.tipo === "Serviço" ? "servico" : produto.tipo === "Licença" ? "licenca" : "produto"; el("produto-destaque").checked = Boolean(produto.destaque); el("titulo-form-produto").textContent = `Editar produto #${produto.id}`; el("cancelar-produto").hidden = false;
+    }
+    if (excluir && window.confirm("Excluir este produto?")) {
+      try { await requisicaoAPI(`/api/produtos/${excluir.dataset.excluirProduto}`, { method: "DELETE" }); produtos = produtos.filter((produto) => produto.id !== Number(excluir.dataset.excluirProduto)); atualizarCategorias(); preencherProdutosGestao(); renderizarCatalogo(); renderizarGestaoProdutos(); mostrarToast("Produto excluído."); } catch (erro) { mostrarToast(erro.message); }
+    }
+  });
+  el("gestao-pedidos").addEventListener("click", async (event) => {
+    const editar = event.target.closest("[data-editar-pedido]");
+    const excluir = event.target.closest("[data-excluir-pedido]");
+    if (editar) {
+      const pedido = pedidos.find((item) => item.id === Number(editar.dataset.editarPedido));
+      const item = pedido?.itens?.[0];
+      if (!pedido || !item) return;
+      el("pedido-id").value = pedido.id; el("pedido-cliente").value = pedido.cliente || ""; el("pedido-cep").value = pedido.cep || ""; el("pedido-produto").value = item.produto.id; el("pedido-quantidade").value = item.quantidade; el("titulo-form-pedido").textContent = `Editar pedido #${pedido.id}`; el("cancelar-pedido").hidden = false;
+    }
+    if (excluir && window.confirm("Excluir este pedido?")) {
+      try { await requisicaoAPI(`/api/pedidos/${excluir.dataset.excluirPedido}`, { method: "DELETE" }); pedidos = pedidos.filter((pedido) => pedido.id !== Number(excluir.dataset.excluirPedido)); renderizarGestaoPedidos(); mostrarToast("Pedido excluído."); } catch (erro) { mostrarToast(erro.message); }
+    }
+  });
+  el("pedido-cep").addEventListener("input", (event) => { const valor = normalizarCep(event.target.value); event.target.value = valor.length > 5 ? `${valor.slice(0, 5)}-${valor.slice(5)}` : valor; });
+  carregarGestao();
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   await carregarProdutos();
-  [...new Set(produtos.map((produto) => produto.categoria))].sort().forEach((categoria) => el("filtro-categoria").insertAdjacentHTML("beforeend", `<option value="${categoria}">${categoria}</option>`));
+  atualizarCategorias();
+  preencherProdutosGestao();
   renderizarCatalogo(); renderizarCarrinho();
+  iniciarGestao();
   el("busca").addEventListener("input", renderizarCatalogo);
   el("filtro-categoria").addEventListener("change", renderizarCatalogo);
   el("catalogo-produtos").addEventListener("click", (event) => { const botao = event.target.closest("[data-add]"); if (botao) adicionarAoCarrinho(Number(botao.dataset.add)); });

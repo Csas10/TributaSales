@@ -6,9 +6,13 @@
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
+    "dev": "nodemon server/server.js",
     "cli": "node server/cli.js"
   },
   "dependencies": {
     "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
   }
 }

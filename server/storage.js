@@ -1,43 +1,13 @@
-const fs = require("node:fs/promises");
-const path = require("node:path");
+// Compatibility facade for the CLI and existing consumers.
+const ProductRepository = require("./repositories/product-repository");
+const OrderRepository = require("./repositories/order-repository");
 
-const dataDir = path.join(__dirname, "..", "data");
+const products = new ProductRepository();
+const orders = new OrderRepository();
 
-async function lerJSON(nome, padrao) {
-  try {
-    const dados = JSON.parse(await fs.readFile(path.join(dataDir, nome), "utf8"));
-    if (Array.isArray(dados)) return dados;
-    console.warn(`${nome} não contém uma lista; usando valor padrão.`);
-    return padrao;
-  } catch (erro) {
-    if (erro.code === "ENOENT") return padrao;
-    if (erro instanceof SyntaxError) {
-      console.warn(`${nome} contém JSON inválido; usando valor padrão.`);
-      return padrao;
-    }
-    throw erro;
-  }
-}
-
-async function gravarJSON(nome, dados) {
-  await fs.mkdir(dataDir, { recursive: true });
-  await fs.writeFile(path.join(dataDir, nome), `${JSON.stringify(dados, null, 2)}\n`, "utf8");
-}
-
-async function listarProdutos() {
-  return lerJSON("produtos.json", []);
-}
-
-async function salvarProdutos(produtos) {
-  return gravarJSON("produtos.json", produtos);
-}
-
-async function listarPedidos() {
-  return lerJSON("pedidos.json", []);
-}
-
-async function salvarPedidos(pedidos) {
-  return gravarJSON("pedidos.json", pedidos);
-}
+const listarProdutos = () => products.findAll();
+const salvarProdutos = (value) => products.saveAll(value);
+const listarPedidos = () => orders.findAll();
+const salvarPedidos = (value) => orders.saveAll(value);
 
 module.exports = { listarProdutos, salvarProdutos, listarPedidos, salvarPedidos };

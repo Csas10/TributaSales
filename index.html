@@ -16,6 +16,7 @@
       <nav aria-label="Navegação principal">
         <a href="#catalogo">Catálogo</a>
         <a href="#pedido">Meu pedido <span id="contador-carrinho" class="badge" role="status" aria-live="polite" aria-atomic="true">0</span></a>
+        <a href="#gestao">Gestão</a>
       </nav>
     </header>
 
@@ -76,6 +77,48 @@
           <article class="tool-card"><span class="tool-icon">%</span><h3>Calculadora de desconto</h3><p>Simule uma negociação antes de fechar a venda.</p><div class="calculator"><div class="field-row"><label>Valor (R$)<input id="valor" type="number" min="0" step="0.01" placeholder="0,00" /></label><label>Desconto (%)<input id="desconto" type="number" min="0" max="100" step="0.1" placeholder="0" /></label></div><button id="calcular-desconto" class="button button-secondary" type="button">Calcular</button><p id="resultado-desconto" class="result" role="status">Informe os valores para calcular.</p></div></article>
           <article class="tool-card"><span class="tool-icon">⌖</span><h3>Consultar endereço</h3><p>Valide o CEP para evitar erros na entrega do pedido.</p><div class="calculator"><label>CEP<input id="cep" inputmode="numeric" maxlength="9" placeholder="00000-000" /></label><button id="buscar-cep" class="button button-secondary" type="button">Consultar CEP</button><div id="endereco" class="address-result" role="status">O endereço aparecerá aqui.</div></div></article>
         </div>
+      </section>
+
+      <section id="gestao" class="management-section section">
+        <div class="section-heading">
+          <div><p class="eyebrow">API REST</p><h2>Gestão de registros</h2></div>
+          <button id="atualizar-gestao" class="button button-ghost" type="button">Atualizar dados</button>
+        </div>
+        <div class="management-grid">
+          <article class="management-card">
+            <h3 id="titulo-form-produto">Novo produto</h3>
+            <form id="form-produto" class="management-form">
+              <input id="produto-id" type="hidden" />
+              <label>Nome<input id="produto-nome" required minlength="2" /></label>
+              <label>Descrição<input id="produto-descricao" /></label>
+              <div class="field-row">
+                <label>Preço (R$)<input id="produto-preco" type="number" min="0" step="0.01" required /></label>
+                <label>Categoria<input id="produto-categoria" value="Geral" required /></label>
+              </div>
+              <label>Tipo
+                <select id="produto-tipo"><option value="produto">Produto</option><option value="servico">Serviço</option><option value="licenca">Licença</option></select>
+              </label>
+              <label class="check-label"><input id="produto-destaque" type="checkbox" /> Produto em destaque</label>
+              <div class="form-actions"><button class="button button-primary" type="submit">Salvar produto</button><button id="cancelar-produto" class="button button-ghost" type="button" hidden>Cancelar</button></div>
+            </form>
+            <div id="gestao-produtos" class="management-list" aria-live="polite"></div>
+          </article>
+          <article class="management-card">
+            <h3 id="titulo-form-pedido">Novo pedido</h3>
+            <form id="form-pedido" class="management-form">
+              <input id="pedido-id" type="hidden" />
+              <label>Cliente<input id="pedido-cliente" placeholder="Nome do cliente" /></label>
+              <label>CEP<input id="pedido-cep" inputmode="numeric" maxlength="9" placeholder="00000-000" /></label>
+              <label>Produto
+                <select id="pedido-produto" required></select>
+              </label>
+              <label>Quantidade<input id="pedido-quantidade" type="number" min="1" step="1" value="1" required /></label>
+              <div class="form-actions"><button class="button button-primary" type="submit">Salvar pedido</button><button id="cancelar-pedido" class="button button-ghost" type="button" hidden>Cancelar</button></div>
+            </form>
+            <div id="gestao-pedidos" class="management-list" aria-live="polite"></div>
+          </article>
+        </div>
+        <p id="mensagem-gestao" class="result" role="status">Os dados exibidos vêm da API quando o servidor está ativo.</p>
       </section>
     </main>
     <footer><span class="brand"><span class="brand-mark">T</span><span>tributa<span class="brand-accent">sales</span></span></span><span>Sistema de Gestão de Vendas · Parte 2</span></footer>

@@ -21,6 +21,12 @@ function carregarCarrinho() {
 const estado = { carrinho: carregarCarrinho(), percentualDesconto: 0 };
 const el = (id) => document.getElementById(id);
 
+function escapeHtml(texto) {
+  const div = document.createElement("div");
+  div.textContent = String(texto);
+  return div.innerHTML;
+}
+
 function salvarCarrinho() {
   localStorage.setItem("tributasales-carrinho", JSON.stringify(estado.carrinho));
 }
@@ -30,7 +36,7 @@ function renderizarCatalogo() {
   const categoria = el("filtro-categoria").value;
   const lista = produtos.filter((produto) => (!termo || `${produto.nome} ${produto.descricao}`.toLowerCase().includes(termo)) && (categoria === "Todos" || produto.categoria === categoria));
   el("catalogo-vazio").hidden = lista.length > 0;
-  el("catalogo-produtos").innerHTML = lista.map((produto) => `<article class="product-card"><div class="product-image product-${produto.id}"><span>${produto.categoria}</span>${produto.destaque ? "<b>Mais vendido</b>" : ""}</div><div class="product-content"><p class="product-category">${produto.categoria}</p><h3>${produto.nome}</h3><p>${produto.descricao}</p><div class="product-footer"><strong>${moeda(produto.preco)}</strong><button class="button button-add" data-add="${produto.id}" type="button">Adicionar <span>+</span></button></div></div></article>`).join("");
+  el("catalogo-produtos").innerHTML = lista.map((p) => `<article class="product-card"><div class="product-image product-${escapeHtml(p.id)}"><span>${escapeHtml(p.categoria)}</span>${p.destaque ? "<b>Mais vendido</b>" : ""}</div><div class="product-content"><p class="product-category">${escapeHtml(p.categoria)}</p><h3>${escapeHtml(p.nome)}</h3><p>${escapeHtml(p.descricao)}</p><div class="product-footer"><strong>${moeda(p.preco)}</strong><button class="button button-add" data-add="${escapeHtml(p.id)}" type="button">Adicionar <span>+</span></button></div></div></article>`).join("");
 }
 
 function atualizarResumo() {
@@ -43,7 +49,7 @@ function atualizarResumo() {
 }
 
 function renderizarCarrinho() {
-  el("itens-carrinho").innerHTML = estado.carrinho.length ? estado.carrinho.map((item) => `<div class="cart-item"><div><strong>${item.nome}</strong><small>${moeda(item.preco)} cada</small></div><div class="quantity"><button data-quantity="${item.id}" data-change="-1" type="button" aria-label="Diminuir quantidade">−</button><span>${item.quantidade}</span><button data-quantity="${item.id}" data-change="1" type="button" aria-label="Aumentar quantidade">+</button></div><strong>${moeda(item.preco * item.quantidade)}</strong></div>`).join("") : '<p class="empty-state">Seu pedido está vazio. Adicione itens do catálogo.</p>';
+  el("itens-carrinho").innerHTML = estado.carrinho.length ? estado.carrinho.map((item) => `<div class="cart-item"><div><strong>${escapeHtml(item.nome)}</strong><small>${moeda(item.preco)} cada</small></div><div class="quantity"><button data-quantity="${escapeHtml(item.id)}" data-change="-1" type="button" aria-label="Diminuir quantidade">−</button><span>${escapeHtml(item.quantidade)}</span><button data-quantity="${escapeHtml(item.id)}" data-change="1" type="button" aria-label="Aumentar quantidade">+</button></div><strong>${moeda(item.preco * item.quantidade)}</strong></div>`).join("") : '<p class="empty-state">Seu pedido está vazio. Adicione itens do catálogo.</p>';
   atualizarResumo();
 }
 
@@ -78,7 +84,7 @@ async function carregarProdutos() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   await carregarProdutos();
-  [...new Set(produtos.map((produto) => produto.categoria))].sort().forEach((categoria) => el("filtro-categoria").insertAdjacentHTML("beforeend", `<option value="${categoria}">${categoria}</option>`));
+  [...new Set(produtos.map((produto) => produto.categoria))].sort().forEach((categoria) => el("filtro-categoria").insertAdjacentHTML("beforeend", `<option value="${escapeHtml(categoria)}">${escapeHtml(categoria)}</option>`));
   renderizarCatalogo(); renderizarCarrinho();
   el("busca").addEventListener("input", renderizarCatalogo);
   el("filtro-categoria").addEventListener("change", renderizarCatalogo);

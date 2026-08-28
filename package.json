@@ -5,10 +5,16 @@
   "description": "Sistema acadêmico de gestão de vendas - TributaSales Parte 2",
   "main": "server/server.js",
   "scripts": {
+    "dev": "node server/server.js",
     "start": "node server/server.js",
+    "build": "node build.js",
+    "preview": "vite preview",
     "cli": "node server/cli.js"
   },
   "dependencies": {
     "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "vite": "^8.2.2"
   }
 }

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="TributaSales: catálogo e gestão inicial de vendas para pequenos comerciantes." />
+    <title>TributaSales | Gestão de vendas</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="TributaSales - início"><span class="brand-mark">T</span><span>tributa<span class="brand-accent">sales</span></span></a>
+      <nav aria-label="Navegação principal">
+        <a href="#catalogo">Catálogo</a>
+        <a href="#pedido">Meu pedido <span id="contador-carrinho" class="badge" role="status" aria-live="polite" aria-atomic="true">0</span></a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Gestão simples para vender melhor</p>
+          <h1>Seu negócio organizado,<br /><span>suas vendas no controle.</span></h1>
+          <p class="hero-copy">Catálogo, pedidos e informações de entrega em um só lugar. Feito para pequenos comerciantes.</p>
+          <a class="button button-primary" href="#catalogo">Explorar catálogo <span aria-hidden="true">→</span></a>
+        </div>
+        <div class="hero-card" aria-label="Resumo de venda">
+          <div class="hero-card-top"><span class="status-dot"></span> Venda de hoje</div>
+          <strong>R$ 1.248,90</strong>
+          <div class="chart"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <small>+18,4% <span>vs. semana anterior</span></small>
+        </div>
+      </section>
+
+      <section id="catalogo" class="section">
+        <div class="section-heading">
+          <div><p class="eyebrow">Produtos e serviços</p><h2>Catálogo</h2></div>
+          <div class="catalog-tools">
+            <label class="search"><span aria-hidden="true">⌕</span><input id="busca" type="search" aria-label="Buscar produto no catálogo" placeholder="Buscar produto..." /></label>
+            <label class="select-label"><span class="sr-only">Filtrar categoria</span><select id="filtro-categoria"><option value="Todos">Todas as categorias</option></select></label>
+          </div>
+        </div>
+        <div id="catalogo-produtos" class="product-grid" aria-live="polite"></div>
+        <p id="catalogo-vazio" class="empty-state" hidden>Nenhum item encontrado. Tente outro termo ou categoria.</p>
+      </section>
+
+      <section id="pedido" class="order-section section">
+        <div class="section-heading"><div><p class="eyebrow">Finalização</p><h2>Meu pedido</h2></div><button id="limpar-carrinho" class="button button-ghost" type="button">Limpar pedido</button></div>
+        <div class="order-layout">
+          <div class="order-panel">
+            <div id="itens-carrinho" class="cart-items" aria-live="polite" aria-atomic="true"><p class="empty-state">Seu pedido está vazio. Adicione itens do catálogo.</p></div>
+            <div class="discount-box">
+              <label for="codigo-desconto">Código de desconto</label>
+              <div class="discount-row"><input id="codigo-desconto" placeholder="Ex.: PRIMEIRACOMPRA" /><button id="aplicar-desconto" class="button button-secondary" type="button">Aplicar</button></div>
+              <small id="mensagem-desconto" role="status"></small>
+            </div>
+          </div>
+          <aside class="summary">
+            <h3>Resumo da venda</h3>
+            <div><span>Subtotal</span><strong id="subtotal">R$ 0,00</strong></div>
+            <div><span>Desconto</span><strong id="valor-desconto" class="discount-value">- R$ 0,00</strong></div>
+            <hr />
+            <div class="total"><span>Total</span><strong id="total">R$ 0,00</strong></div>
+            <button id="finalizar-pedido" class="button button-primary button-full" type="button">Finalizar pedido</button>
+            <p class="summary-note">Apenas uma simulação acadêmica. Nenhum pagamento é processado.</p>
+          </aside>
+        </div>
+      </section>
+
+      <section class="tools-section section">
+        <div class="section-heading"><div><p class="eyebrow">Ferramentas do vendedor</p><h2>Venda com mais segurança</h2></div></div>
+        <div class="tools-grid">
+          <article class="tool-card"><span class="tool-icon">%</span><h3>Calculadora de desconto</h3><p>Simule uma negociação antes de fechar a venda.</p><div class="calculator"><div class="field-row"><label>Valor (R$)<input id="valor" type="number" min="0" step="0.01" placeholder="0,00" /></label><label>Desconto (%)<input id="desconto" type="number" min="0" max="100" step="0.1" placeholder="0" /></label></div><button id="calcular-desconto" class="button button-secondary" type="button">Calcular</button><p id="resultado-desconto" class="result" role="status">Informe os valores para calcular.</p></div></article>
+          <article class="tool-card"><span class="tool-icon">⌖</span><h3>Consultar endereço</h3><p>Valide o CEP para evitar erros na entrega do pedido.</p><div class="calculator"><label>CEP<input id="cep" inputmode="numeric" maxlength="9" placeholder="00000-000" /></label><button id="buscar-cep" class="button button-secondary" type="button">Consultar CEP</button><div id="endereco" class="address-result" role="status">O endereço aparecerá aqui.</div></div></article>
+        </div>
+      </section>
+    </main>
+    <footer><span class="brand"><span class="brand-mark">T</span><span>tributa<span class="brand-accent">sales</span></span></span><span>Sistema de Gestão de Vendas · Parte 2</span></footer>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="js/produtos.js"></script>
+    <script src="js/descontos.js"></script>
+    <script src="js/cep.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>

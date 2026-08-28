@@ -8,7 +8,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 app.use(express.json());
 if (!process.env.VERCEL) {
-  app.use(express.static(path.join(__dirname, "..")));
+  app.use(express.static(path.join(__dirname, "..", "public")));
 }
 
 app.get("/api/produtos", async (req, res, next) => {

@@ -15,7 +15,11 @@ function errorMiddleware(error, req, res, next) {
   if (error instanceof NotFoundError) return res.status(404).json({ erro: error.message, status: 404 });
   if (req.path.startsWith("/api/cep/")) return res.status(502).json({ erro: error.message, status: 502 });
   console.error(error);
-  return res.status(error.status || 500).json({ erro: error.message || "Erro interno do servidor.", status: error.status || 500 });
+  const status = Number.isInteger(error.status) && error.status >= 400 && error.status < 500 ? error.status : 500;
+  const message = process.env.NODE_ENV === "production" && status === 500
+    ? "Erro interno do servidor."
+    : error.message || "Erro interno do servidor.";
+  return res.status(status).json({ erro: message, status });
 }
 
 module.exports = { NotFoundError, errorMiddleware };

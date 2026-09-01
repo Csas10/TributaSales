@@ -1,3 +1,13 @@
+function escapeHtml(valor) {
+  return String(valor ?? "").replace(/[&<>"']/g, (caractere) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  }[caractere]));
+}
+
 function carregarCarrinho() {
   const salvo = localStorage.getItem("tributasales-carrinho");
   if (!salvo) return [];
@@ -30,7 +40,7 @@ function renderizarCatalogo() {
   const categoria = el("filtro-categoria").value;
   const lista = produtos.filter((produto) => (!termo || `${produto.nome} ${produto.descricao}`.toLowerCase().includes(termo)) && (categoria === "Todos" || produto.categoria === categoria));
   el("catalogo-vazio").hidden = lista.length > 0;
-  el("catalogo-produtos").innerHTML = lista.map((produto) => `<article class="product-card"><div class="product-image product-${produto.id}"><span>${produto.categoria}</span>${produto.destaque ? "<b>Mais vendido</b>" : ""}</div><div class="product-content"><p class="product-category">${produto.categoria}</p><h3>${produto.nome}</h3><p>${produto.descricao}</p><div class="product-footer"><strong>${moeda(produto.preco)}</strong><button class="button button-add" data-add="${produto.id}" type="button">Adicionar <span>+</span></button></div></div></article>`).join("");
+  el("catalogo-produtos").innerHTML = lista.map((produto) => `<article class="product-card"><div class="product-image product-${escapeHtml(produto.id)}"><span>${escapeHtml(produto.categoria)}</span>${produto.destaque ? "<b>Mais vendido</b>" : ""}</div><div class="product-content"><p class="product-category">${escapeHtml(produto.categoria)}</p><h3>${escapeHtml(produto.nome)}</h3><p>${escapeHtml(produto.descricao)}</p><div class="product-footer"><strong>${moeda(produto.preco)}</strong><button class="button button-add" data-add="${escapeHtml(produto.id)}" type="button">Adicionar <span>+</span></button></div></div></article>`).join("");
 }
 
 function atualizarResumo() {
@@ -43,7 +53,7 @@ function atualizarResumo() {
 }
 
 function renderizarCarrinho() {
-  el("itens-carrinho").innerHTML = estado.carrinho.length ? estado.carrinho.map((item) => `<div class="cart-item"><div><strong>${item.nome}</strong><small>${moeda(item.preco)} cada</small></div><div class="quantity"><button data-quantity="${item.id}" data-change="-1" type="button" aria-label="Diminuir quantidade">−</button><span>${item.quantidade}</span><button data-quantity="${item.id}" data-change="1" type="button" aria-label="Aumentar quantidade">+</button></div><strong>${moeda(item.preco * item.quantidade)}</strong></div>`).join("") : '<p class="empty-state">Seu pedido está vazio. Adicione itens do catálogo.</p>';
+  el("itens-carrinho").innerHTML = estado.carrinho.length ? estado.carrinho.map((item) => `<div class="cart-item"><div><strong>${escapeHtml(item.nome)}</strong><small>${moeda(item.preco)} cada</small></div><div class="quantity"><button data-quantity="${escapeHtml(item.id)}" data-change="-1" type="button" aria-label="Diminuir quantidade">−</button><span>${item.quantidade}</span><button data-quantity="${escapeHtml(item.id)}" data-change="1" type="button" aria-label="Aumentar quantidade">+</button></div><strong>${moeda(item.preco * item.quantidade)}</strong></div>`).join("") : '<p class="empty-state">Seu pedido está vazio. Adicione itens do catálogo.</p>';
   atualizarResumo();
 }
 
@@ -76,6 +86,15 @@ async function carregarProdutos() {
   }
 }
 
+function reconciliarCarrinho() {
+  estado.carrinho = estado.carrinho.reduce((carrinho, item) => {
+    const produto = produtos.find((candidato) => candidato.id === Number(item.id));
+    if (produto) carrinho.push({ ...produto, quantidade: item.quantidade });
+    return carrinho;
+  }, []);
+  salvarCarrinho();
+}
+
 let pedidos = [];
 let apiDisponivel = window.location.protocol !== "file:";
 
@@ -92,26 +111,26 @@ function atualizarCategorias() {
   const select = el("filtro-categoria");
   const atual = select.value;
   select.innerHTML = '<option value="Todos">Todas as categorias</option>';
-  [...new Set(produtos.map((produto) => produto.categoria))].sort().forEach((categoria) => select.insertAdjacentHTML("beforeend", `<option value="${categoria}">${categoria}</option>`));
+  [...new Set(produtos.map((produto) => produto.categoria))].sort().forEach((categoria) => select.insertAdjacentHTML("beforeend", `<option value="${escapeHtml(categoria)}">${escapeHtml(categoria)}</option>`));
   select.value = [...select.options].some((option) => option.value === atual) ? atual : "Todos";
 }
 
 function preencherProdutosGestao() {
   const select = el("pedido-produto");
   if (!select) return;
-  select.innerHTML = produtos.map((produto) => `<option value="${produto.id}">${produto.nome} · ${moeda(produto.preco)}</option>`).join("");
+  select.innerHTML = produtos.map((produto) => `<option value="${escapeHtml(produto.id)}">${escapeHtml(produto.nome)} · ${moeda(produto.preco)}</option>`).join("");
 }
 
 function renderizarGestaoProdutos() {
   const destino = el("gestao-produtos");
   if (!destino) return;
-  destino.innerHTML = produtos.length ? produtos.map((produto) => `<div class="management-row"><div><strong>${produto.nome}</strong><small>${produto.categoria} · ${moeda(produto.preco)}</small></div><div class="row-actions"><button class="button button-ghost" data-editar-produto="${produto.id}" type="button">Editar</button><button class="button button-danger" data-excluir-produto="${produto.id}" type="button">Excluir</button></div></div>`).join("") : '<p class="empty-state">Nenhum produto cadastrado.</p>';
+  destino.innerHTML = produtos.length ? produtos.map((produto) => `<div class="management-row"><div><strong>${escapeHtml(produto.nome)}</strong><small>${escapeHtml(produto.categoria)} · ${moeda(produto.preco)}</small></div><div class="row-actions"><button class="button button-ghost" data-editar-produto="${escapeHtml(produto.id)}" type="button">Editar</button><button class="button button-danger" data-excluir-produto="${escapeHtml(produto.id)}" type="button">Excluir</button></div></div>`).join("") : '<p class="empty-state">Nenhum produto cadastrado.</p>';
 }
 
 function renderizarGestaoPedidos() {
   const destino = el("gestao-pedidos");
   if (!destino) return;
-  destino.innerHTML = pedidos.length ? pedidos.map((pedido) => `<div class="management-row"><div><strong>Pedido #${pedido.id}</strong><small>${pedido.cliente || "Cliente não informado"} · ${moeda(pedido.total)}</small></div><div class="row-actions"><button class="button button-ghost" data-editar-pedido="${pedido.id}" type="button">Editar</button><button class="button button-danger" data-excluir-pedido="${pedido.id}" type="button">Excluir</button></div></div>`).join("") : '<p class="empty-state">Nenhum pedido registrado.</p>';
+  destino.innerHTML = pedidos.length ? pedidos.map((pedido) => `<div class="management-row"><div><strong>Pedido #${escapeHtml(pedido.id)}</strong><small>${escapeHtml(pedido.cliente || "Cliente não informado")} · ${moeda(pedido.total)}</small></div><div class="row-actions"><button class="button button-ghost" data-editar-pedido="${escapeHtml(pedido.id)}" type="button">Editar</button><button class="button button-danger" data-excluir-pedido="${escapeHtml(pedido.id)}" type="button">Excluir</button></div></div>`).join("") : '<p class="empty-state">Nenhum pedido registrado.</p>';
 }
 
 async function carregarGestao() {
@@ -123,6 +142,7 @@ async function carregarGestao() {
     const [produtosApi, pedidosApi] = await Promise.all([requisicaoAPI("/api/produtos"), requisicaoAPI("/api/pedidos")]);
     if (Array.isArray(produtosApi)) produtos = produtosApi;
     if (Array.isArray(pedidosApi)) pedidos = pedidosApi;
+    reconciliarCarrinho();
     atualizarCategorias(); preencherProdutosGestao(); renderizarCatalogo(); renderizarGestaoProdutos(); renderizarGestaoPedidos();
     el("mensagem-gestao").textContent = "Produtos e pedidos sincronizados com a API.";
   } catch (erro) {
@@ -200,6 +220,7 @@ function iniciarGestao() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   await carregarProdutos();
+  reconciliarCarrinho();
   atualizarCategorias();
   preencherProdutosGestao();
   renderizarCatalogo(); renderizarCarrinho();

@@ -1,6 +1,6 @@
 # TributaSales
 
-Sistema acadêmico de gestão de vendas. A atividade 3 parte da versão **v0.2.0** e organiza o backend em módulos MVC, mantendo as classes de domínio, as validações, a CLI, o ViaCEP e a experiência do catálogo.
+Sistema acadêmico de gestão de vendas. A atividade 3 parte da versão **v0.3.0** e organiza o backend em módulos MVC, mantendo as classes de domínio, as validações, a CLI, o ViaCEP e a experiência do catálogo.
 
 ## Executar
 
@@ -19,7 +19,7 @@ server/
 ├── routes/                 # mapeamento HTTP
 ├── controllers/            # entrada/saída das requisições
 ├── services/               # regras de aplicação e composição do domínio
-├── repositories/           # persistência JSON com fs/promises
+├── repositories/           # persistência local JSON e fallback efêmero em memória
 ├── middleware/             # tratamento uniforme de erros
 ├── models.js               # Produto, ProdutoServico, ProdutoLicenca e Pedido
 ├── cep-service.js          # integração ViaCEP
@@ -27,6 +27,28 @@ server/
 └── cli.js                  # interface de linha de comando preservada
 data/                       # produtos.json e pedidos.json
 ```
+
+### Fluxo da aplicação
+
+```text
+frontend (index.html + js/) → routes → controllers → services → repositories
+                                                        ├→ data/*.json (local)
+                                                        └→ memória efêmera (Vercel)
+```
+
+No desenvolvimento local, `JsonRepository` lê e grava os arquivos JSON versionados em
+`data/` usando `fs/promises`. Em Vercel, o mesmo repositório carrega os dados iniciais
+dos JSON e usa uma cópia em memória para as alterações: o filesystem da função é
+somente leitura e essa persistência é efêmera, podendo ser perdida entre instâncias ou
+novos deploys. Os arquivos de dados não são ignorados pelo Git.
+
+## Deploy na Vercel
+
+O `vercel.json` encaminha `/`, `/css/**`, `/js/**` e `/api/**` para
+`server/server.js`; o Express entrega os arquivos estáticos e as rotas MVC. Para
+publicar, conecte o repositório à Vercel ou execute `vercel` na raiz do projeto.
+A API funciona com o fallback em memória descrito acima, mas não deve ser usada como
+armazenamento permanente em produção.
 
 ## API REST
 
@@ -80,6 +102,7 @@ npm run cli -- pedido
 
 - **v0.1.0:** catálogo estático, carrinho, cupons, calculadora e validação de CEP.
 - **v0.2.0:** Express, persistência JSON assíncrona, classes de domínio, CLI e primeiras APIs.
-- **Atividade 3:** MVC explícito (rotas, controllers, services, repositories e middleware), CRUD completo de produtos/pedidos, respostas HTTP coerentes, `nodemon` e painel frontend conectado à API.
+- **v0.3.0:** MVC explícito (rotas, controllers, services, repositories e middleware), CRUD completo de produtos/pedidos, respostas HTTP coerentes, `nodemon` e painel frontend conectado à API.
+- **v0.3.1:** integração de deploy na Vercel, fallback efêmero em memória e proteção de respostas 500 em produção.
 
-Os arquivos JSON em `data/` são a persistência da aplicação; não são adicionadas regras fiscais ou alíquotas legais.
+Os arquivos JSON em `data/` são a persistência local e a fonte inicial do deploy; não são adicionadas regras fiscais ou alíquotas legais.

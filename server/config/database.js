@@ -10,6 +10,14 @@ class DatabaseConnectionError extends Error {
   }
 }
 
+class DatabaseUnavailableError extends Error {
+  constructor() {
+    super("Serviço temporariamente indisponível.");
+    this.name = "DatabaseUnavailableError";
+    this.status = 503;
+  }
+}
+
 function createDatabaseManager(mongooseClient = mongoose) {
   let connection = null;
   let connectionPromise = null;
@@ -70,10 +78,21 @@ function getDatabaseStatus() {
   return databaseManager.getState(config.mongoUri);
 }
 
+async function requireDatabase() {
+  if (!config.mongoUri) throw new DatabaseUnavailableError();
+  try {
+    return await connectDatabase();
+  } catch (_error) {
+    throw new DatabaseUnavailableError();
+  }
+}
+
 module.exports = {
   CONNECTION_TIMEOUT_MS,
   DatabaseConnectionError,
+  DatabaseUnavailableError,
   connectDatabase,
   createDatabaseManager,
-  getDatabaseStatus
+  getDatabaseStatus,
+  requireDatabase
 };

@@ -138,3 +138,18 @@ Ainda não existem controllers ou rotas públicas de User/Address. Não há
 `password`, bcrypt, login, JWT, autorização ou schemas de marketplace neste
 gate. Os services recebem a conexão e os models por injeção nos testes; nenhum
 teste depende do Atlas ou do ViaCEP.
+
+## Gate 3 — Autenticação
+
+O Gate 3 adiciona `bcrypt`, `jsonwebtoken` e as rotas públicas
+`POST /api/auth/register` e `POST /api/auth/login`. O registro recebe apenas
+`name`, `email` e `password`; o hash é produzido internamente e nunca aparece
+na resposta. O login retorna um JWT mínimo com `sub` igual ao identificador do
+usuário, sem usar email ou role como autorização.
+
+`JWT_SECRET` e `JWT_EXPIRES_IN` são opcionais no carregamento global. A
+autenticação exige Mongo e configuração JWT somente durante a operação: sem
+Mongo, as rotas de auth retornam `503`, enquanto `/api/health`,
+`/api/produtos` e a persistência JSON continuam funcionando. Senhas têm entre
+8 caracteres e 72 bytes UTF-8, sem `trim()`. Ainda não há middleware
+`authenticate`, RBAC ou rotas de Address públicas.

@@ -68,13 +68,20 @@ function resolveMongoUri(source) {
   return mongoUri;
 }
 
+function resolveOptionalValue(source, key, fallback = null) {
+  const value = valueOf(source, key);
+  return value == null || value === "" ? fallback : value;
+}
+
 function createConfig(source = process.env) {
   const appEnvironment = resolveAppEnvironment(source);
   return Object.freeze({
     appEnv: appEnvironment,
     nodeEnv: resolveNodeEnvironment(source),
     port: resolvePort(source),
-    mongoUri: resolveMongoUri(source)
+    mongoUri: resolveMongoUri(source),
+    jwtSecret: resolveOptionalValue(source, "JWT_SECRET"),
+    jwtExpiresIn: resolveOptionalValue(source, "JWT_EXPIRES_IN", "1h")
   });
 }
 

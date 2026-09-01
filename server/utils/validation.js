@@ -66,6 +66,49 @@ function validateUserInput(payload) {
   };
 }
 
+function validatePassword(password, { required = true } = {}) {
+  if (typeof password !== "string" || (required && password.length === 0)) {
+    throw new ValidacaoErro("A senha é obrigatória.");
+  }
+  if (password.length < 8) {
+    throw new ValidacaoErro("A senha deve conter pelo menos 8 caracteres.");
+  }
+  if (Buffer.byteLength(password, "utf8") > 72) {
+    throw new ValidacaoErro("A senha deve conter no máximo 72 bytes.");
+  }
+  return password;
+}
+
+function validateLoginPassword(password) {
+  if (typeof password !== "string" || password.length === 0) {
+    throw new ValidacaoErro("A senha é obrigatória.");
+  }
+  if (Buffer.byteLength(password, "utf8") > 72) {
+    throw new ValidacaoErro("A senha deve conter no máximo 72 bytes.");
+  }
+  return password;
+}
+
+function validateRegisterInput(payload) {
+  requireObjectPayload(payload);
+  if (Object.prototype.hasOwnProperty.call(payload, "passwordHash")) {
+    throw new ValidacaoErro("passwordHash não é aceito no registro.");
+  }
+  return {
+    name: normalizeText(payload.name, "O nome", { min: 2, max: 120 }),
+    email: normalizeEmail(payload.email),
+    password: validatePassword(payload.password)
+  };
+}
+
+function validateLoginInput(payload) {
+  requireObjectPayload(payload);
+  return {
+    email: normalizeEmail(payload.email),
+    password: validateLoginPassword(payload.password)
+  };
+}
+
 function validateAddressInput(payload) {
   requireObjectPayload(payload);
   return {
@@ -92,6 +135,9 @@ module.exports = {
   normalizePasswordHash,
   normalizeState,
   requireObjectPayload,
+  validateLoginInput,
+  validatePassword,
+  validateRegisterInput,
   validateAddressInput,
   validateUserInput
 };

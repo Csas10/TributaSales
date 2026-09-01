@@ -1,7 +1,11 @@
 const User = require("../models/User");
 const { connectDatabase } = require("../config/database");
 const { NotFoundError } = require("../middleware/error-middleware");
-const { normalizeObjectId, validateUserInput } = require("../utils/validation");
+const {
+  normalizeEmail,
+  normalizeObjectId,
+  validateUserInput
+} = require("../utils/validation");
 
 class ConflictError extends Error {
   constructor(message) {
@@ -49,6 +53,16 @@ class UserService {
     if (!user) throw new NotFoundError("Usuário não encontrado.");
     return toPublicUser(user);
   }
+
+  async findForAuthentication(email) {
+    const normalizedEmail = normalizeEmail(email);
+    await this.connect();
+    let query = this.UserModel.findOne({ email: normalizedEmail });
+    if (query && typeof query.select === "function") {
+      query = query.select("+passwordHash");
+    }
+    return query;
+  }
 }
 
-module.exports = { ConflictError, UserService };
+module.exports = { ConflictError, UserService, toPublicUser };

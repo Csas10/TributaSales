@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node server/server.js",
     "dev": "nodemon server/server.js",
-    "cli": "node server/cli.js"
+    "cli": "node server/cli.js",
+    "check": "node scripts/check-syntax.js",
+    "test": "node --test"
   },
   "dependencies": {
     "express": "^4.21.2"

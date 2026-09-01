@@ -153,3 +153,17 @@ Mongo, as rotas de auth retornam `503`, enquanto `/api/health`,
 `/api/produtos` e a persistência JSON continuam funcionando. Senhas têm entre
 8 caracteres e 72 bytes UTF-8, sem `trim()`. Ainda não há middleware
 `authenticate`, RBAC ou rotas de Address públicas.
+
+## Gate 4 — Autenticação efetiva e ownership
+
+O Gate 4 verifica o JWT com algoritmo fixo `HS256`, carrega o usuário atual do
+Mongo e atribui somente sua representação pública a `req.user`. O middleware
+`authorize(...roles)` usa exclusivamente `req.user.role`; claims de role no
+token não são consideradas.
+
+As rotas protegidas são `GET /api/users/me` e as operações de endereço em
+`/api/users/me/addresses`. O ownership é sempre derivado de `req.user._id`;
+não há `userId` confiável em body, query ou URL. Tokens ausentes, inválidos,
+expirados, com assinatura inválida ou usuário removido retornam `401`;
+permissão insuficiente retorna `403`; falhas de configuração ou Mongo
+retornam `503`.

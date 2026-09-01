@@ -18,6 +18,9 @@ class ConflictError extends Error {
 function toPublicUser(user) {
   const object = user && typeof user.toObject === "function" ? user.toObject() : { ...user };
   delete object.passwordHash;
+  if (object._id && typeof object._id.toString === "function") {
+    object._id = object._id.toString();
+  }
   return object;
 }
 

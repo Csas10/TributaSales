@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const { config, ConfigurationError } = require("../config/env");
+const { InvalidTokenError } = require("./auth-errors");
 
 class JwtConfigurationError extends ConfigurationError {
   constructor() {
@@ -32,7 +33,27 @@ function createTokenProvider(jwtClient = jwt, configuration = config) {
     };
   }
 
-  return { issue };
+  function verify(accessToken) {
+    if (!configuration.jwtSecret || Buffer.byteLength(configuration.jwtSecret, "utf8") < 32) {
+      throw new JwtConfigurationError();
+    }
+    try {
+      const claims = jwtClient.verify(accessToken, configuration.jwtSecret, {
+        algorithms: ["HS256"]
+      });
+      if (!claims || typeof claims !== "object" || typeof claims.sub !== "string" || !claims.sub) {
+        throw new InvalidTokenError();
+      }
+      return claims;
+    } catch (error) {
+      if (error instanceof JwtConfigurationError || error instanceof InvalidTokenError) {
+        throw error;
+      }
+      throw new InvalidTokenError();
+    }
+  }
+
+  return { issue, verify };
 }
 
 const tokenProvider = createTokenProvider();

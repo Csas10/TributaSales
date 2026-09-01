@@ -54,6 +54,36 @@ function normalizeState(value) {
   return state;
 }
 
+function normalizeSlug(value) {
+  const name = normalizeText(value, "O nome", { min: 2, max: 120 });
+  const slug = name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!slug) throw new ValidacaoErro("Não foi possível gerar um slug válido.");
+  return slug;
+}
+
+function normalizePrice(value) {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    Number(value.toFixed(2)) !== value
+  ) {
+    throw new ValidacaoErro("O preço deve ser um número finito, não negativo e ter no máximo 2 casas.");
+  }
+  return Number(value.toFixed(2));
+}
+
+function normalizeBoolean(value, field, fallback) {
+  if (value == null) return fallback;
+  if (typeof value !== "boolean") throw new ValidacaoErro(`${field} deve ser booleano.`);
+  return value;
+}
+
 function validateUserInput(payload) {
   requireObjectPayload(payload);
   if (Object.prototype.hasOwnProperty.call(payload, "password")) {
@@ -63,6 +93,33 @@ function validateUserInput(payload) {
     name: normalizeText(payload.name, "O nome", { min: 2, max: 120 }),
     email: normalizeEmail(payload.email),
     passwordHash: normalizePasswordHash(payload.passwordHash)
+  };
+}
+
+function validateCategoryInput(payload) {
+  requireObjectPayload(payload);
+  return {
+    name: normalizeText(payload.name, "O nome", { min: 2, max: 120 }),
+    description: normalizeText(payload.description, "A descrição", {
+      required: false,
+      max: 300
+    }),
+    active: normalizeBoolean(payload.active, "active", true)
+  };
+}
+
+function validateProductInput(payload) {
+  requireObjectPayload(payload);
+  return {
+    name: normalizeText(payload.name, "O nome", { min: 2, max: 120 }),
+    description: normalizeText(payload.description, "A descrição", {
+      required: false,
+      max: 500
+    }),
+    price: normalizePrice(payload.price),
+    category: normalizeObjectId(payload.category, "A categoria"),
+    active: normalizeBoolean(payload.active, "active", true),
+    featured: normalizeBoolean(payload.featured, "featured", false)
   };
 }
 
@@ -131,12 +188,17 @@ function validateAddressInput(payload) {
 module.exports = {
   normalizeCep,
   normalizeEmail,
+  normalizeBoolean,
   normalizeObjectId,
   normalizePasswordHash,
+  normalizePrice,
+  normalizeSlug,
   normalizeState,
   requireObjectPayload,
   validateLoginInput,
   validatePassword,
+  validateCategoryInput,
+  validateProductInput,
   validateRegisterInput,
   validateAddressInput,
   validateUserInput

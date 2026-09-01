@@ -11,16 +11,23 @@ const OrderController = require("./controllers/order-controller");
 const { AuthService } = require("./services/auth-service");
 const { UserService } = require("./services/user-service");
 const { AddressService } = require("./services/address-service");
+const { CatalogProductService } = require("./services/catalog-product-service");
+const { CategoryService } = require("./services/category-service");
 const AuthController = require("./controllers/auth-controller");
 const UserController = require("./controllers/user-controller");
 const AddressController = require("./controllers/address-controller");
+const CatalogProductController = require("./controllers/catalog-product-controller");
+const CatalogCategoryController = require("./controllers/catalog-category-controller");
 const productRoutes = require("./routes/product-routes");
 const orderRoutes = require("./routes/order-routes");
 const cepRoutes = require("./routes/cep-routes");
 const healthRoutes = require("./routes/health-routes");
 const authRoutes = require("./routes/auth-routes");
 const userRoutes = require("./routes/user-routes");
+const catalogProductRoutes = require("./routes/catalog-product-routes");
+const catalogCategoryRoutes = require("./routes/catalog-category-routes");
 const { createAuthenticate } = require("./middleware/authenticate");
+const authorize = require("./middleware/authorize");
 const { errorMiddleware } = require("./middleware/error-middleware");
 
 const app = express();
@@ -37,10 +44,17 @@ const authService = new AuthService({
 const addressService = new AddressService({
   connect: requireDatabase
 });
+const catalogProductService = new CatalogProductService({
+  connect: requireDatabase
+});
+const categoryService = new CategoryService({
+  connect: requireDatabase
+});
 const authenticate = createAuthenticate({
   userService: mongoUserService,
   connect: requireDatabase
 });
+const adminAuthorization = authorize("admin");
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..")));
@@ -55,6 +69,22 @@ app.use(
     new UserController(),
     new AddressController(addressService),
     authenticate
+  )
+);
+app.use(
+  "/api/catalog/products",
+  catalogProductRoutes(
+    new CatalogProductController(catalogProductService),
+    authenticate,
+    adminAuthorization
+  )
+);
+app.use(
+  "/api/catalog/categories",
+  catalogCategoryRoutes(
+    new CatalogCategoryController(categoryService),
+    authenticate,
+    adminAuthorization
   )
 );
 app.use("/api", (req, res) => res.status(404).json({ erro: "Rota não encontrada.", status: 404 }));

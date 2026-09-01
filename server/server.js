@@ -1,5 +1,6 @@
 const express = require("express");
 const path = require("node:path");
+const { config } = require("./config/env");
 const ProductRepository = require("./repositories/product-repository");
 const OrderRepository = require("./repositories/order-repository");
 const { ProductService } = require("./services/product-service");
@@ -9,10 +10,11 @@ const OrderController = require("./controllers/order-controller");
 const productRoutes = require("./routes/product-routes");
 const orderRoutes = require("./routes/order-routes");
 const cepRoutes = require("./routes/cep-routes");
+const healthRoutes = require("./routes/health-routes");
 const { errorMiddleware } = require("./middleware/error-middleware");
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = config.port;
 
 const productService = new ProductService(new ProductRepository());
 const orderService = new OrderService(new OrderRepository(), new ProductRepository());
@@ -22,6 +24,7 @@ app.use(express.static(path.join(__dirname, "..")));
 app.use("/api/produtos", productRoutes(new ProductController(productService)));
 app.use("/api/pedidos", orderRoutes(new OrderController(orderService)));
 app.use("/api/cep", cepRoutes);
+app.use("/api/health", healthRoutes);
 app.use("/api", (req, res) => res.status(404).json({ erro: "Rota não encontrada.", status: 404 }));
 app.use(errorMiddleware);
 

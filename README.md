@@ -22,6 +22,8 @@ server/
 ├── repositories/           # persistência local JSON e fallback efêmero em memória
 ├── middleware/             # tratamento uniforme de erros
 ├── config/                 # ambientes e conexão Mongoose lazy
+├── models/                 # schemas Mongoose introduzidos por gate
+├── utils/                  # validações compartilhadas
 ├── models.js               # Produto, ProdutoServico, ProdutoLicenca e Pedido
 ├── cep-service.js          # integração ViaCEP
 ├── server.js               # composição da aplicação
@@ -122,3 +124,17 @@ Mongo (`not_configured`, `connecting`, `connected` ou `disconnected`), sem URI,
 cluster ou credenciais. A conexão é lazy, reutiliza a conexão aquecida em
 execuções serverless, deduplica chamadas simultâneas e permite nova tentativa
 após uma falha.
+
+## Gate 2 — User e Address
+
+O Gate 2 adiciona os schemas Mongoose `User` e `Address` e seus services,
+mantendo o CRUD JSON legado como fonte oficial. `Address.user` referencia
+`User` por `ObjectId`; CEP é persistido com oito dígitos e UF com duas letras
+maiúsculas. O usuário usa `passwordHash` não selecionável e removido da
+serialização, enquanto a criação técnica força `role: "user"` e traduz email
+duplicado para `409 Conflict`.
+
+Ainda não existem controllers ou rotas públicas de User/Address. Não há
+`password`, bcrypt, login, JWT, autorização ou schemas de marketplace neste
+gate. Os services recebem a conexão e os models por injeção nos testes; nenhum
+teste depende do Atlas ou do ViaCEP.

@@ -17,7 +17,7 @@ function errorMiddleware(error, req, res, next) {
   const status = Number.isInteger(error.status) && ((error.status >= 400 && error.status < 500) || error.status === 503)
     ? error.status
     : 500;
-  if (status === 401 || status === 409 || status === 503) {
+  if (status === 401 || status === 403 || status === 409 || status === 503) {
     return res.status(status).json({ erro: error.message, status });
   }
   console.error(error);

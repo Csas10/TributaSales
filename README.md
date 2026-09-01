@@ -167,3 +167,18 @@ não há `userId` confiável em body, query ou URL. Tokens ausentes, inválidos,
 expirados, com assinatura inválida ou usuário removido retornam `401`;
 permissão insuficiente retorna `403`; falhas de configuração ou Mongo
 retornam `503`.
+
+## Gate 5 — Product e Category MongoDB
+
+O Gate 5 mantém `/api/produtos` e `/api/pedidos` intactos como API JSON
+legada e adiciona o catálogo Mongo em `/api/catalog/products` e
+`/api/catalog/categories`. GETs são públicos; POST, PUT e DELETE exigem
+`authenticate` seguido de `authorize("admin")`.
+
+Categorias geram slug normalizado, único e sem acentos. Produtos referenciam
+categorias por `ObjectId` e só podem usar categorias existentes e ativas.
+Categoria inexistente retorna `404`; categoria existente e inativa retorna
+`409`. Preço é validado como número finito, não negativo e com até duas casas.
+Categorias referenciadas por produtos não podem ser removidas (`409`).
+Sem `MONGO_URI`, as rotas do catálogo retornam `503`, enquanto o CRUD JSON e
+`/api/health` continuam independentes.

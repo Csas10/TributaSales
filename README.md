@@ -106,3 +106,5 @@ npm run cli -- pedido
 - **v0.3.1:** integração de deploy na Vercel, fallback efêmero em memória e proteção de respostas 500 em produção.
 
 Os arquivos JSON em `data/` são a persistência local e a fonte inicial do deploy; não são adicionadas regras fiscais ou alíquotas legais.
+
+Branch criada exclusivamente para validar o ruleset administrativo de `main`.

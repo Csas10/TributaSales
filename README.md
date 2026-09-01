@@ -21,6 +21,7 @@ server/
 ├── services/               # regras de aplicação e composição do domínio
 ├── repositories/           # persistência local JSON e fallback efêmero em memória
 ├── middleware/             # tratamento uniforme de erros
+├── config/                 # ambientes e conexão Mongoose lazy
 ├── models.js               # Produto, ProdutoServico, ProdutoLicenca e Pedido
 ├── cep-service.js          # integração ViaCEP
 ├── server.js               # composição da aplicação
@@ -106,3 +107,18 @@ npm run cli -- pedido
 - **v0.3.1:** integração de deploy na Vercel, fallback efêmero em memória e proteção de respostas 500 em produção.
 
 Os arquivos JSON em `data/` são a persistência local e a fonte inicial do deploy; não são adicionadas regras fiscais ou alíquotas legais.
+
+## Gate 1 — Fundação MongoDB/Mongoose
+
+O Gate 1 adiciona `dotenv`, `mongoose`, `server/config/env.js` e
+`server/config/database.js` sem migrar os CRUDs. O MongoDB é opcional nesta
+etapa: sem `MONGO_URI`, a aplicação continua usando os repositories JSON.
+`MONGO_URI` deve ser fornecida por ambiente (`development`, `test`, `preview`
+ou `production`) e nunca é versionada. O arquivo `.env.example` contém somente
+nomes e valores demonstrativos.
+
+`GET /api/health` informa apenas o ambiente funcional e o estado resumido do
+Mongo (`not_configured`, `connecting`, `connected` ou `disconnected`), sem URI,
+cluster ou credenciais. A conexão é lazy, reutiliza a conexão aquecida em
+execuções serverless, deduplica chamadas simultâneas e permite nova tentativa
+após uma falha.

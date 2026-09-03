@@ -13,7 +13,11 @@ const Product = require("../server/models/Product");
 const User = require("../server/models/User");
 const { DatabaseUnavailableError } = require("../server/config/database");
 const { FavoriteService } = require("../server/services/favorite-service");
-const { CartConflictError, CartService } = require("../server/services/cart-service");
+const {
+  CartCalculationError,
+  CartConflictError,
+  CartService
+} = require("../server/services/cart-service");
 const { ForbiddenError } = require("../server/utils/auth-errors");
 const authorize = require("../server/middleware/authorize");
 const {
@@ -55,6 +59,7 @@ function product(id = productId, overrides = {}) {
 function atomicCartUpdate(cart, filter, update) {
   if (!cart) return null;
   const itemFilter = filter["items.product"];
+  const elementFilter = filter.items && filter.items.$elemMatch;
   const items = cart.items || [];
   if (typeof itemFilter === "string") {
     if (!items.some((item) => item.product === itemFilter)) return null;
@@ -62,8 +67,17 @@ function atomicCartUpdate(cart, filter, update) {
   if (itemFilter && itemFilter.$ne && items.some((item) => item.product === itemFilter.$ne)) {
     return null;
   }
+  if (elementFilter) {
+    const matchingItem = items.find(
+      (item) =>
+        item.product === elementFilter.product &&
+        item.quantity <= elementFilter.quantity.$lte
+    );
+    if (!matchingItem) return null;
+  }
   if (update.$inc) {
-    const item = items.find((candidate) => candidate.product === itemFilter);
+    const product = elementFilter ? elementFilter.product : itemFilter;
+    const item = items.find((candidate) => candidate.product === product);
     if (!item) return null;
     item.quantity += update.$inc["items.$.quantity"];
   }
@@ -143,6 +157,82 @@ test("valida itens de Cart com ObjectId e quantidade estritos", () => {
       /quantidade/
     );
   }
+});
+
+test("rejeita quantity fora da faixa segura e aceita inteiro seguro", () => {
+  assert.equal(normalizeQuantity(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER);
+  assert.throws(() => normalizeQuantity(Number.MAX_SAFE_INTEGER + 1), /quantidade/);
+  assert.throws(() => normalizeQuantity(1e308), /quantidade/);
+});
+
+test("Cart schema rejeita quantity fora da faixa segura", () => {
+  const cart = new Cart({
+    user: new mongoose.Types.ObjectId(userId),
+    items: [{
+      product: new mongoose.Types.ObjectId(productId),
+      quantity: Number.MAX_SAFE_INTEGER + 1
+    }]
+  });
+  assert.ok(cart.validateSync().errors["items.0.quantity"]);
+});
+
+test("CartModel.init é aguardado e compartilhado entre preparações concorrentes", async () => {
+  let initCalls = 0;
+  let releaseInit;
+  const events = [];
+  const initPromise = new Promise((resolve) => {
+    releaseInit = resolve;
+  });
+  const service = new CartService({
+    connect: async () => {},
+    CartModel: {
+      init: () => {
+        initCalls += 1;
+        events.push("init");
+        return initPromise.then(() => events.push("ready"));
+      },
+      findOne: async () => {
+        events.push("find");
+        return null;
+      }
+    },
+    ProductModel: { find: async () => [] }
+  });
+
+  const pending = Promise.all([service.get(userId), service.get(userId)]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(initCalls, 1);
+  assert.deepEqual(events, ["init"]);
+  releaseInit();
+  await pending;
+  assert.deepEqual(events, ["init", "ready", "find", "find"]);
+});
+
+test("falha de CartModel.init vira 503 e permite nova tentativa", async () => {
+  let initCalls = 0;
+  const service = new CartService({
+    connect: async () => {},
+    CartModel: {
+      init: async () => {
+        initCalls += 1;
+        if (initCalls === 1) throw new Error("index failure");
+      },
+      findOne: async () => null
+    },
+    ProductModel: { find: async () => [] }
+  });
+
+  await assert.rejects(
+    () => service.get(userId),
+    (error) => {
+      assert.ok(error instanceof DatabaseUnavailableError);
+      assert.equal(error.status, 503);
+      return true;
+    }
+  );
+  const emptyCart = await service.get(userId);
+  assert.deepEqual(emptyCart, { items: [], total: 0, unavailableItems: 0 });
+  assert.equal(initCalls, 2);
 });
 
 test("FavoriteService usa $addToSet, rejeita produto inativo e permite remover stale", async () => {
@@ -292,6 +382,38 @@ test("CartService usa preço atual e preserva itens inativos/excluídos na leitu
   assert.equal(result.total, 50);
 });
 
+test("CartService mantém subtotal e total finitos e rejeita overflow monetário", async () => {
+  const service = new CartService({
+    connect: async () => {},
+    ProductModel: {
+      find: async () => [product(productId, { price: 19.99 })]
+    },
+    CartModel: {}
+  });
+  const result = await service.response({
+    items: [{ product: productId, quantity: 3 }]
+  });
+  const serialized = JSON.parse(JSON.stringify(result));
+  assert.equal(Number.isFinite(serialized.items[0].subtotal), true);
+  assert.equal(Number.isFinite(serialized.total), true);
+  assert.notEqual(serialized.items[0].subtotal, null);
+  assert.notEqual(serialized.total, null);
+
+  const overflowService = new CartService({
+    connect: async () => {},
+    ProductModel: {
+      find: async () => [product(productId, { price: Number.MAX_SAFE_INTEGER })]
+    },
+    CartModel: {}
+  });
+  await assert.rejects(
+    () => overflowService.response({
+      items: [{ product: productId, quantity: 1 }]
+    }),
+    CartCalculationError
+  );
+});
+
 test("CartService aplica PUT absoluto, remove item e clear idempotente", async () => {
   let cart = {
     user: userId,
@@ -394,6 +516,69 @@ test("CartService adiciona item existente com $inc posicional", async () => {
   assert.deepEqual(Object.keys(operations[0].update), ["$inc"]);
   assert.equal(operations[0].update.$inc["items.$.quantity"], 3);
   assert.equal(operations[0].update.$set, undefined);
+});
+
+test("CartService limita atomicamente $inc e retorna 409 no overflow", async () => {
+  const cart = {
+    user: userId,
+    items: [{ product: productId, quantity: Number.MAX_SAFE_INTEGER }]
+  };
+  const operations = [];
+  const service = new CartService({
+    connect: async () => {},
+    ProductModel: {
+      findById: async () => product({ price: 0 }),
+      find: async () => []
+    },
+    CartModel: {
+      findOne: async () => cart,
+      findOneAndUpdate: async (filter, update) => {
+        operations.push({ filter, update });
+        return atomicCartUpdate(cart, filter, update);
+      }
+    }
+  });
+
+  await assert.rejects(
+    () => service.addItem(userId, { productId, quantity: 1 }),
+    (error) => {
+      assert.equal(error.status, 409);
+      assert.equal(error.message, "Quantidade do carrinho excede o limite seguro.");
+      return true;
+    }
+  );
+  assert.equal(operations[0].filter.items.$elemMatch.quantity.$lte, Number.MAX_SAFE_INTEGER - 1);
+  assert.equal(operations[1].update.$push.items.product, productId);
+  assert.equal(operations[2].update.$inc["items.$.quantity"], 1);
+  assert.equal(cart.items[0].quantity, Number.MAX_SAFE_INTEGER);
+});
+
+test("adições concorrentes próximas ao limite não ultrapassam inteiro seguro", async () => {
+  const cart = {
+    user: userId,
+    items: [{ product: productId, quantity: Number.MAX_SAFE_INTEGER - 2 }]
+  };
+  const service = new CartService({
+    connect: async () => {},
+    ProductModel: {
+      findById: async () => product({ price: 0 }),
+      find: async () => []
+    },
+    CartModel: {
+      findOne: async () => cart,
+      findOneAndUpdate: async (filter, update) => {
+        await Promise.resolve();
+        return atomicCartUpdate(cart, filter, update);
+      }
+    }
+  });
+
+  await Promise.all([
+    service.addItem(userId, { productId, quantity: 1 }),
+    service.addItem(userId, { productId, quantity: 1 })
+  ]);
+  assert.equal(cart.items[0].quantity, Number.MAX_SAFE_INTEGER);
+  assert.ok(Number.isSafeInteger(cart.items[0].quantity));
 });
 
 test("CartService insere item ausente com $push condicionado", async () => {

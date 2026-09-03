@@ -12,7 +12,8 @@ const cartItemSchema = new mongoose.Schema(
       required: true,
       min: 1,
       validate: {
-        validator: (value) => Number.isInteger(value) && value >= 1,
+        validator: (value) =>
+          Number.isSafeInteger(value) && value >= 1,
         message: "A quantidade deve ser um inteiro maior que zero."
       }
     }

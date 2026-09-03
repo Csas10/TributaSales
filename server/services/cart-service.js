@@ -1,6 +1,9 @@
 const Cart = require("../models/Cart");
 const Product = require("../models/Product");
-const { requireDatabase } = require("../config/database");
+const {
+  DatabaseUnavailableError,
+  requireDatabase
+} = require("../config/database");
 const { NotFoundError } = require("../middleware/error-middleware");
 const {
   normalizeObjectId,
@@ -16,6 +19,16 @@ class CartConflictError extends Error {
   }
 }
 
+class CartCalculationError extends Error {
+  constructor() {
+    super("Não foi possível calcular os valores do carrinho.");
+    this.name = "CartCalculationError";
+    this.status = 500;
+  }
+}
+
+const MAX_SAFE_CENTS = Number.MAX_SAFE_INTEGER;
+
 function identifier(value) {
   return value && typeof value.toString === "function" ? value.toString() : String(value);
 }
@@ -23,12 +36,27 @@ function identifier(value) {
 function publicProduct(product) {
   if (!product) return null;
   const object = typeof product.toObject === "function" ? product.toObject() : product;
+  const priceCents = moneyToCents(object.price);
   return {
     _id: identifier(object._id),
     name: object.name,
-    price: object.price,
+    price: priceCents / 100,
     active: object.active
   };
+}
+
+function moneyToCents(value) {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    Number(value.toFixed(2)) !== value
+  ) {
+    throw new CartCalculationError();
+  }
+  const cents = Math.round(value * 100);
+  if (!Number.isSafeInteger(cents)) throw new CartCalculationError();
+  return cents;
 }
 
 class CartService {
@@ -40,12 +68,27 @@ class CartService {
     this.CartModel = CartModel;
     this.ProductModel = ProductModel;
     this.connect = connect;
+    this.cartInitPromise = null;
   }
 
   async prepareUser(userId) {
     const normalizedUserId = normalizeObjectId(userId, "O usuário");
     await this.connect();
+    await this.prepareCartModel();
     return normalizedUserId;
+  }
+
+  async prepareCartModel() {
+    if (typeof this.CartModel.init !== "function") return;
+    if (!this.cartInitPromise) {
+      this.cartInitPromise = Promise.resolve()
+        .then(() => this.CartModel.init())
+        .catch(() => {
+          this.cartInitPromise = null;
+          throw new DatabaseUnavailableError();
+        });
+    }
+    return this.cartInitPromise;
   }
 
   async currentProduct(productId) {
@@ -82,9 +125,17 @@ class CartService {
           subtotal: null
         };
       }
-      const unitPrice = Number(product.price);
-      const subtotal = Number((unitPrice * quantity).toFixed(2));
-      total = Number((total + subtotal).toFixed(2));
+      if (!Number.isSafeInteger(quantity) || quantity < 1) {
+        throw new CartCalculationError();
+      }
+      const unitPriceCents = moneyToCents(product.price);
+      const subtotalCents = unitPriceCents * quantity;
+      if (!Number.isSafeInteger(subtotalCents)) throw new CartCalculationError();
+      const totalCents = moneyToCents(total) + subtotalCents;
+      if (!Number.isSafeInteger(totalCents)) throw new CartCalculationError();
+      const unitPrice = unitPriceCents / 100;
+      const subtotal = subtotalCents / 100;
+      total = totalCents / 100;
       return {
         productId: identifier(item.product),
         product: publicProduct(product),
@@ -127,7 +178,14 @@ class CartService {
     let cart = await this.CartModel.findOneAndUpdate(
       {
         user: normalizedUserId,
-        "items.product": input.productId
+        items: {
+          $elemMatch: {
+            product: input.productId,
+            quantity: {
+              $lte: MAX_SAFE_CENTS - input.quantity
+            }
+          }
+        }
       },
       {
         $inc: {
@@ -157,7 +215,14 @@ class CartService {
       cart = await this.CartModel.findOneAndUpdate(
         {
           user: normalizedUserId,
-          "items.product": input.productId
+          items: {
+            $elemMatch: {
+              product: input.productId,
+              quantity: {
+              $lte: MAX_SAFE_CENTS - input.quantity
+              }
+            }
+          }
         },
         {
           $inc: {
@@ -167,7 +232,14 @@ class CartService {
         { new: true, runValidators: true }
       );
     }
-    if (!cart) throw new NotFoundError("Carrinho não encontrado.");
+    if (!cart) {
+      const existing = await this.CartModel.findOne({
+        user: normalizedUserId,
+        "items.product": input.productId
+      });
+      if (existing) throw new CartConflictError("Quantidade do carrinho excede o limite seguro.");
+      throw new NotFoundError("Carrinho não encontrado.");
+    }
     return this.response(cart);
   }
 
@@ -218,4 +290,10 @@ class CartService {
   }
 }
 
-module.exports = { CartConflictError, CartService, publicProduct };
+module.exports = {
+  CartCalculationError,
+  CartConflictError,
+  CartService,
+  moneyToCents,
+  publicProduct
+};

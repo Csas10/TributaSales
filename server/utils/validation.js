@@ -128,6 +128,7 @@ function normalizeQuantity(value) {
     typeof value !== "number" ||
     !Number.isFinite(value) ||
     !Number.isInteger(value) ||
+    !Number.isSafeInteger(value) ||
     value < 1
   ) {
     throw new ValidacaoErro("A quantidade deve ser um inteiro maior que zero.");

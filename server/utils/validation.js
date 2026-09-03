@@ -123,6 +123,31 @@ function validateProductInput(payload) {
   };
 }
 
+function normalizeQuantity(value) {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value < 1
+  ) {
+    throw new ValidacaoErro("A quantidade deve ser um inteiro maior que zero.");
+  }
+  return value;
+}
+
+function validateCartItemInput(payload) {
+  requireObjectPayload(payload);
+  return {
+    productId: normalizeObjectId(payload.productId, "O produto"),
+    quantity: normalizeQuantity(payload.quantity)
+  };
+}
+
+function validateCartQuantityInput(payload) {
+  requireObjectPayload(payload);
+  return { quantity: normalizeQuantity(payload.quantity) };
+}
+
 function validatePassword(password, { required = true } = {}) {
   if (typeof password !== "string" || (required && password.length === 0)) {
     throw new ValidacaoErro("A senha é obrigatória.");
@@ -192,12 +217,15 @@ module.exports = {
   normalizeObjectId,
   normalizePasswordHash,
   normalizePrice,
+  normalizeQuantity,
   normalizeSlug,
   normalizeState,
   requireObjectPayload,
   validateLoginInput,
   validatePassword,
   validateCategoryInput,
+  validateCartItemInput,
+  validateCartQuantityInput,
   validateProductInput,
   validateRegisterInput,
   validateAddressInput,

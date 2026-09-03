@@ -1,7 +1,13 @@
 const express = require("express");
 const asyncHandler = require("../middleware/async-handler");
 
-function userRoutes(userController, addressController, authenticate) {
+function userRoutes(
+  userController,
+  addressController,
+  authenticate,
+  favoriteController,
+  cartController
+) {
   const router = express.Router();
   router.get("/me", authenticate, asyncHandler(userController.me.bind(userController)));
   router.post(
@@ -24,6 +30,38 @@ function userRoutes(userController, addressController, authenticate) {
     authenticate,
     asyncHandler(addressController.remove)
   );
+  router.get(
+    "/me/favorites",
+    authenticate,
+    asyncHandler(favoriteController.list)
+  );
+  router.post(
+    "/me/favorites/:productId",
+    authenticate,
+    asyncHandler(favoriteController.add)
+  );
+  router.delete(
+    "/me/favorites/:productId",
+    authenticate,
+    asyncHandler(favoriteController.remove)
+  );
+  router.get("/me/cart", authenticate, asyncHandler(cartController.get));
+  router.post(
+    "/me/cart/items",
+    authenticate,
+    asyncHandler(cartController.addItem)
+  );
+  router.put(
+    "/me/cart/items/:productId",
+    authenticate,
+    asyncHandler(cartController.updateItem)
+  );
+  router.delete(
+    "/me/cart/items/:productId",
+    authenticate,
+    asyncHandler(cartController.removeItem)
+  );
+  router.delete("/me/cart", authenticate, asyncHandler(cartController.clear));
   return router;
 }
 

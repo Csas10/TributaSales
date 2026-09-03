@@ -182,3 +182,16 @@ Categoria inexistente retorna `404`; categoria existente e inativa retorna
 Categorias referenciadas por produtos não podem ser removidas (`409`).
 Sem `MONGO_URI`, as rotas do catálogo retornam `503`, enquanto o CRUD JSON e
 `/api/health` continuam independentes.
+
+## Gate 6 — Cart e Favorites MongoDB
+
+O Gate 6 adiciona favoritos como referências `User.favorites` para `Product`
+com semântica de conjunto, além de um `Cart` por usuário. As rotas ficam sob
+`/api/users/me` e exigem somente `authenticate`; o proprietário é sempre
+`req.user._id`.
+
+O carrinho persiste somente produto e quantidade. Preço, subtotal e total são
+derivados dos Products atuais na leitura. Produtos inativos ou excluídos não
+são removidos silenciosamente: aparecem como indisponíveis e não entram no
+total. O CRUD JSON legado, pedidos históricos e arquivos `data/*.json`
+permanecem preservados.

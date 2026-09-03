@@ -58,6 +58,13 @@ function product(id = productId, overrides = {}) {
 
 function atomicCartUpdate(cart, filter, update) {
   if (!cart) return null;
+  if (cart.__v === undefined) cart.__v = 0;
+  if (
+    Object.prototype.hasOwnProperty.call(filter, "__v") &&
+    filter.__v !== cart.__v
+  ) {
+    return null;
+  }
   const itemFilter = filter["items.product"];
   const elementFilter = filter.items && filter.items.$elemMatch;
   const items = cart.items || [];
@@ -75,7 +82,7 @@ function atomicCartUpdate(cart, filter, update) {
     );
     if (!matchingItem) return null;
   }
-  if (update.$inc) {
+  if (update.$inc && Object.prototype.hasOwnProperty.call(update.$inc, "items.$.quantity")) {
     const product = elementFilter ? elementFilter.product : itemFilter;
     const item = items.find((candidate) => candidate.product === product);
     if (!item) return null;
@@ -99,7 +106,93 @@ function atomicCartUpdate(cart, filter, update) {
       (item) => item.product !== update.$pull.items.product
     );
   }
+  if (update.$inc && Object.prototype.hasOwnProperty.call(update.$inc, "__v")) {
+    cart.__v += update.$inc.__v;
+  }
   return cart;
+}
+
+// Libera operações somente depois que as primeiras leituras esperadas foram
+// observadas. As leituras posteriores não são bloqueadas, permitindo provar o
+// reread da operação que perdeu o CAS.
+function createFirstReadBarrier(expectedReads = 2) {
+  let resolveReady;
+  let resolveRelease;
+  let didRelease = false;
+  const ready = new Promise((resolve) => {
+    resolveReady = resolve;
+  });
+  const released = new Promise((resolve) => {
+    resolveRelease = resolve;
+  });
+  const reads = [];
+
+  return {
+    reads,
+    ready,
+    get isReleased() {
+      return didRelease;
+    },
+    release() {
+      didRelease = true;
+      resolveRelease();
+    },
+    async observe(read) {
+      if (reads.length >= expectedReads) return;
+      reads.push(read);
+      if (reads.length === expectedReads) resolveReady();
+      await released;
+    }
+  };
+}
+
+function cloneCart(cart) {
+  return {
+    ...cart,
+    items: (cart.items || []).map((item) => ({ ...item }))
+  };
+}
+
+// Simula um "banco" persistente compartilhado por múltiplas instâncias de
+// CartService (múltiplos processos/serverless), sem qualquer estado de
+// serviço compartilhado (sem lock em memória comum). Cada chamada de
+// findOneAndUpdate aplica o mesmo protocolo de concorrência otimista via __v
+// usado pelo CartModel real. Cada findOne devolve um snapshot independente,
+// como uma leitura real do banco, para que uma gravação não altere a versão
+// já observada pela outra instância.
+function createSharedCartStore(initialCarts, { onRead } = {}) {
+  const carts = new Map();
+  const reads = [];
+  const writes = [];
+  for (const [userId, cart] of Object.entries(initialCarts)) {
+    carts.set(userId, cloneCart({ ...cart, __v: cart.__v ?? 0 }));
+  }
+  return {
+    carts,
+    reads,
+    writes,
+    CartModel: {
+      findOne: async (filter, label) => {
+        const cart = carts.get(filter.user);
+        if (!cart) return null;
+        const snapshot = cloneCart(cart);
+        const read = { label, version: snapshot.__v };
+        reads.push(read);
+        if (onRead) await onRead(read);
+        return snapshot;
+      },
+      findOneAndUpdate: async (filter, update, label) => {
+        const cart = carts.get(filter.user);
+        const updated = atomicCartUpdate(cart, filter, update);
+        writes.push({
+          accepted: Boolean(updated),
+          label,
+          version: filter.__v
+        });
+        return updated ? cloneCart(updated) : null;
+      }
+    }
+  };
 }
 
 test("define Cart com usuário único e referências User/Product", () => {
@@ -206,6 +299,71 @@ test("CartModel.init é aguardado e compartilhado entre preparações concorrent
   releaseInit();
   await pending;
   assert.deepEqual(events, ["init", "ready", "find", "find"]);
+});
+
+test("createIndexes é preferido, aguardado e compartilhado antes da consulta", async () => {
+  let createIndexesCalls = 0;
+  let releaseIndexes;
+  const events = [];
+  const indexesPromise = new Promise((resolve) => {
+    releaseIndexes = resolve;
+  });
+  const service = new CartService({
+    connect: async () => {},
+    CartModel: {
+      createIndexes: () => {
+        createIndexesCalls += 1;
+        events.push("indexes");
+        return indexesPromise.then(() => events.push("ready"));
+      },
+      init: () => {
+        throw new Error("init não deveria ser chamado");
+      },
+      findOne: async () => {
+        events.push("find");
+        return null;
+      }
+    },
+    ProductModel: { find: async () => [] }
+  });
+
+  const pending = Promise.all([service.get(userId), service.get(userId)]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(createIndexesCalls, 1);
+  assert.deepEqual(events, ["indexes"]);
+  releaseIndexes();
+  await pending;
+  assert.deepEqual(events, ["indexes", "ready", "find", "find"]);
+});
+
+test("falha de createIndexes vira 503 e permite nova tentativa", async () => {
+  let createIndexesCalls = 0;
+  const service = new CartService({
+    connect: async () => {},
+    CartModel: {
+      createIndexes: async () => {
+        createIndexesCalls += 1;
+        if (createIndexesCalls === 1) throw new Error("index failure");
+      },
+      findOne: async () => null
+    },
+    ProductModel: { find: async () => [] }
+  });
+
+  await assert.rejects(
+    () => service.get(userId),
+    (error) => {
+      assert.ok(error instanceof DatabaseUnavailableError);
+      assert.equal(error.status, 503);
+      return true;
+    }
+  );
+  assert.deepEqual(await service.get(userId), {
+    items: [],
+    total: 0,
+    unavailableItems: 0
+  });
+  assert.equal(createIndexesCalls, 2);
 });
 
 test("falha de CartModel.init vira 503 e permite nova tentativa", async () => {
@@ -414,6 +572,74 @@ test("CartService mantém subtotal e total finitos e rejeita overflow monetário
   );
 });
 
+test("CartService rejeita subtotal inseguro antes da mutação", async () => {
+  const cart = { user: userId, items: [] };
+  let writes = 0;
+  const service = new CartService({
+    connect: async () => {},
+    ProductModel: {
+      findById: async () => product(productId, { price: 19.99 }),
+      find: async () => []
+    },
+    CartModel: {
+      findOne: async () => cart,
+      create: async () => {
+        throw new Error("não deveria criar");
+      },
+      findOneAndUpdate: async () => {
+        writes += 1;
+        throw new Error("não deveria gravar");
+      }
+    }
+  });
+
+  await assert.rejects(
+    () => service.addItem(userId, { productId, quantity: Number.MAX_SAFE_INTEGER }),
+    (error) => {
+      assert.ok(error instanceof CartConflictError);
+      assert.equal(error.status, 409);
+      return true;
+    }
+  );
+  assert.equal(writes, 0);
+  assert.deepEqual(cart.items, []);
+});
+
+test("CartService rejeita total combinado inseguro antes de duas mutações concorrentes", async () => {
+  const existingProductId = "507f1f77bcf86cd799439015";
+  const largePrice = (Number.MAX_SAFE_INTEGER - 1) / 100;
+  const cart = {
+    user: userId,
+    items: [{ product: existingProductId, quantity: 1 }]
+  };
+  let writes = 0;
+  const service = new CartService({
+    connect: async () => {},
+    ProductModel: {
+      findById: async (id) => product(id, { price: 0.02 }),
+      find: async () => [product(existingProductId, { price: largePrice })]
+    },
+    CartModel: {
+      findOne: async () => cart,
+      findOneAndUpdate: async () => {
+        writes += 1;
+        throw new Error("não deveria gravar");
+      }
+    }
+  });
+
+  await assert.rejects(
+    () =>
+      Promise.all([
+        service.addItem(userId, { productId, quantity: 1 }),
+        service.addItem(userId, { productId, quantity: 1 })
+      ]),
+    CartConflictError
+  );
+  assert.equal(writes, 0);
+  assert.deepEqual(cart.items, [{ product: existingProductId, quantity: 1 }]);
+});
+
 test("CartService aplica PUT absoluto, remove item e clear idempotente", async () => {
   let cart = {
     user: userId,
@@ -518,7 +744,7 @@ test("CartService adiciona item existente com $inc posicional", async () => {
   assert.equal(operations[0].update.$set, undefined);
 });
 
-test("CartService limita atomicamente $inc e retorna 409 no overflow", async () => {
+test("CartService rejeita atomicamente overflow de quantidade sem gravar", async () => {
   const cart = {
     user: userId,
     items: [{ product: productId, quantity: Number.MAX_SAFE_INTEGER }]
@@ -527,7 +753,7 @@ test("CartService limita atomicamente $inc e retorna 409 no overflow", async () 
   const service = new CartService({
     connect: async () => {},
     ProductModel: {
-      findById: async () => product({ price: 0 }),
+      findById: async () => product(productId, { price: 0 }),
       find: async () => []
     },
     CartModel: {
@@ -547,9 +773,7 @@ test("CartService limita atomicamente $inc e retorna 409 no overflow", async () 
       return true;
     }
   );
-  assert.equal(operations[0].filter.items.$elemMatch.quantity.$lte, Number.MAX_SAFE_INTEGER - 1);
-  assert.equal(operations[1].update.$push.items.product, productId);
-  assert.equal(operations[2].update.$inc["items.$.quantity"], 1);
+  assert.equal(operations.length, 0);
   assert.equal(cart.items[0].quantity, Number.MAX_SAFE_INTEGER);
 });
 
@@ -561,7 +785,7 @@ test("adições concorrentes próximas ao limite não ultrapassam inteiro seguro
   const service = new CartService({
     connect: async () => {},
     ProductModel: {
-      findById: async () => product({ price: 0 }),
+      findById: async () => product(productId, { price: 0 }),
       find: async () => []
     },
     CartModel: {
@@ -600,14 +824,16 @@ test("CartService insere item ausente com $push condicionado", async () => {
   });
 
   await service.addItem(userId, { productId, quantity: 2 });
-  assert.equal(operations.length, 2);
-  assert.deepEqual(Object.keys(operations[0].update), ["$inc"]);
-  assert.equal(operations[1].update.$push.items.product, productId);
-  assert.deepEqual(operations[1].filter["items.product"], { $ne: productId });
+  assert.equal(operations.length, 1);
+  assert.equal(operations[0].update.$push.items.product, productId);
+  assert.deepEqual(operations[0].filter["items.product"], { $ne: productId });
+  assert.equal(Object.prototype.hasOwnProperty.call(operations[0].filter, "__v"), true);
+  assert.equal(operations[0].update.$inc.__v, 1);
   assert.equal(cart.items.length, 1);
+  assert.equal(cart.__v, 1);
 });
 
-test("CartService repete $inc quando $push perde uma corrida", async () => {
+test("CartService relê e repete a operação correta após corrida de $push", async () => {
   const cart = { user: userId, items: [] };
   const operations = [];
   let incAttempts = 0;
@@ -621,13 +847,15 @@ test("CartService repete $inc quando $push perde uma corrida", async () => {
       findOne: async () => cart,
       findOneAndUpdate: async (filter, update) => {
         operations.push({ filter, update });
-        if (update.$inc) {
-          incAttempts += 1;
-          if (incAttempts === 1) return null;
-        }
         if (update.$push) {
+          // Simula outra requisição inserindo o mesmo produto entre a
+          // leitura e a gravação desta chamada.
           cart.items.push({ product: productId, quantity: 4 });
           return null;
+        }
+        if (update.$inc && Object.prototype.hasOwnProperty.call(update.$inc, "items.$.quantity")) {
+          incAttempts += 1;
+          if (incAttempts === 1) return null;
         }
         return atomicCartUpdate(cart, filter, update);
       }
@@ -636,8 +864,10 @@ test("CartService repete $inc quando $push perde uma corrida", async () => {
 
   const result = await service.addItem(userId, { productId, quantity: 2 });
   assert.equal(operations.length, 3);
-  assert.equal(operations[0].update.$inc["items.$.quantity"], 2);
-  assert.equal(operations[1].update.$push.items.product, productId);
+  assert.ok(operations[0].update.$push);
+  assert.ok(
+    operations[1].update.$inc && operations[1].update.$inc["items.$.quantity"]
+  );
   assert.equal(operations[2].update.$inc["items.$.quantity"], 2);
   assert.equal(result.items[0].quantity, 6);
   assert.equal(cart.items.length, 1);
@@ -668,7 +898,12 @@ test("adições concorrentes do mesmo Product preservam a soma", async () => {
   ]);
   assert.equal(cart.items.length, 1);
   assert.equal(cart.items[0].quantity, 6);
-  assert.equal(operations.filter((operation) => operation.update.$inc).length, 2);
+  // O item já existe desde o início para ambas as chamadas, então a
+  // operação escolhida é sempre $inc (nunca $push ou reescrita completa do
+  // array via $set). O número exato de tentativas pode variar (>= 2) porque,
+  // sem lock em memória, uma corrida real de __v pode exigir uma releitura.
+  assert.ok(operations.length >= 2);
+  assert.ok(operations.every((operation) => operation.update.$inc));
   assert.equal(operations.some((operation) => operation.update.$set), false);
 });
 
@@ -731,15 +966,16 @@ test("PUT usa $set posicional e DELETE usa $pull", async () => {
 
   await service.updateItem(userId, productId, { quantity: 7 });
   await service.removeItem(userId, inactiveProductId);
-  assert.deepEqual(Object.keys(operations[0].update), ["$set"]);
   assert.equal(operations[0].update.$set["items.$.quantity"], 7);
   assert.equal(operations[0].update.$set.items, undefined);
-  assert.deepEqual(Object.keys(operations[1].update), ["$pull"]);
+  assert.equal(operations[0].update.$inc.__v, 1);
   assert.deepEqual(operations[1].update.$pull, {
     items: { product: inactiveProductId }
   });
+  assert.equal(operations[1].update.$inc.__v, 1);
   assert.equal(cart.items.some((item) => item.product === productId), true);
   assert.equal(cart.items.some((item) => item.product === inactiveProductId), false);
+  assert.equal(cart.__v, 2);
 });
 
 test("alterar Product A não regrava nem remove Product B", async () => {
@@ -839,6 +1075,356 @@ test("CartService isola Cart A e preserva Cart B em operações autenticadas", a
   await service.removeItem(userA, productId);
   assert.equal(JSON.stringify(carts[userB]), cartBBefore);
   assert.ok(filters.every((filter) => filter.user === userA));
+});
+
+// ---------------------------------------------------------------------------
+// Concorrência entre INSTÂNCIAS independentes de CartService (não apenas
+// chamadas concorrentes na mesma instância). Nenhum destes testes compartilha
+// cartLocks ou qualquer estado interno de serviço: a única coisa em comum
+// entre serviceA/serviceB é o "banco" simulado (createSharedCartStore), assim
+// como duas réplicas/processos reais compartilhariam apenas o MongoDB.
+// ---------------------------------------------------------------------------
+
+function makeProduct(id, price) {
+  return { _id: id, name: "Produto", price, active: true };
+}
+
+function makeProductModel(products) {
+  return {
+    findById: async (id) => products.get(id) || null,
+    find: async (filter) =>
+      filter._id.$in.map((id) => products.get(id)).filter(Boolean)
+  };
+}
+
+function makeIsolatedCartModel(store, label) {
+  // Cada instância recebe seu próprio objeto CartModel (sem estado
+  // compartilhado além do "banco" simulado), como aconteceria com dois
+  // processos Node distintos apontando para o mesmo MongoDB.
+  return {
+    findOne: (filter) => store.CartModel.findOne(filter, label),
+    findOneAndUpdate: async (filter, update) => {
+      await Promise.resolve();
+      return store.CartModel.findOneAndUpdate(filter, update, label);
+    }
+  };
+}
+
+test("duas instâncias de CartService preservam o total seguro quando a soma combinada estouraria Number.MAX_SAFE_INTEGER", async () => {
+  const existingProductId = "507f1f77bcf86cd799439020";
+  const productA = "507f1f77bcf86cd799439021";
+  const productB = "507f1f77bcf86cd799439022";
+  const largePrice = (Number.MAX_SAFE_INTEGER - 3) / 100;
+  const firstReadBarrier = createFirstReadBarrier();
+
+  const store = createSharedCartStore(
+    {
+      [userId]: { user: userId, items: [{ product: existingProductId, quantity: 1 }] }
+    },
+    { onRead: (read) => firstReadBarrier.observe(read) }
+  );
+  const products = new Map([
+    [existingProductId, makeProduct(existingProductId, largePrice)],
+    [productA, makeProduct(productA, 0.02)],
+    [productB, makeProduct(productB, 0.02)]
+  ]);
+  const ProductModel = makeProductModel(products);
+
+  const serviceA = new CartService({
+    connect: async () => {},
+    ProductModel,
+    CartModel: makeIsolatedCartModel(store, "A")
+  });
+  const serviceB = new CartService({
+    connect: async () => {},
+    ProductModel,
+    CartModel: makeIsolatedCartModel(store, "B")
+  });
+
+  const pending = Promise.allSettled([
+    serviceA.addItem(userId, { productId: productA, quantity: 1 }),
+    serviceB.addItem(userId, { productId: productB, quantity: 1 })
+  ]);
+  await firstReadBarrier.ready;
+
+  const firstReadA = firstReadBarrier.reads.find((read) => read.label === "A");
+  const firstReadB = firstReadBarrier.reads.find((read) => read.label === "B");
+  assert.ok(firstReadA);
+  assert.ok(firstReadB);
+  assert.equal(firstReadA.version, firstReadB.version);
+  assert.equal(firstReadA.version, 0);
+  assert.equal(firstReadBarrier.isReleased, false);
+  assert.equal(store.writes.length, 0);
+
+  firstReadBarrier.release();
+  assert.equal(firstReadBarrier.isReleased, true);
+  const [resultA, resultB] = await pending;
+
+  const outcomes = [resultA, resultB];
+  const fulfilled = outcomes.filter((outcome) => outcome.status === "fulfilled");
+  const rejected = outcomes.filter((outcome) => outcome.status === "rejected");
+
+  // Ambas leram o mesmo total inicial (MAX_SAFE_INTEGER - 3 centavos) e, de
+  // forma isolada, cada adição de 2 centavos parecia seguro. Apenas uma
+  // mutação pode de fato confirmar (via __v); a outra reler o total já
+  // atualizado, perceber que excederia o limite seguro e retornar 409 ANTES
+  // de qualquer gravação — nunca as duas persistem.
+  assert.equal(fulfilled.length, 1);
+  assert.equal(rejected.length, 1);
+  assert.ok(rejected[0].reason instanceof CartConflictError);
+  assert.equal(rejected[0].reason.status, 409);
+
+  const firstWrites = store.writes.filter(
+    (write) => write.version === firstReadA.version
+  );
+  assert.equal(firstWrites.length, 2);
+  assert.equal(firstWrites.filter((write) => write.accepted).length, 1);
+  assert.equal(firstWrites.filter((write) => !write.accepted).length, 1);
+
+  const losingLabel = firstWrites.find((write) => !write.accepted).label;
+  const losingReads = store.reads.filter((read) => read.label === losingLabel);
+  assert.equal(losingReads.length, 2);
+  assert.equal(losingReads[1].version, firstReadA.version + 1);
+  assert.equal(store.writes.length, 2);
+
+  const finalCart = store.carts.get(userId);
+  assert.equal(finalCart.items.length, 2);
+  assert.equal(finalCart.__v, 1);
+
+  const totalCents = finalCart.items.reduce((sum, item) => {
+    const priceCents = Math.round(products.get(item.product).price * 100);
+    return sum + priceCents * item.quantity;
+  }, 0);
+  assert.ok(Number.isSafeInteger(totalCents));
+  assert.equal(totalCents, Number.MAX_SAFE_INTEGER - 1);
+
+  // GET posterior nunca lança CartCalculationError, mesmo perto do limite.
+  const verifyService = new CartService({
+    connect: async () => {},
+    ProductModel,
+    CartModel: makeIsolatedCartModel(store, "verify")
+  });
+  const getResult = await verifyService.get(userId);
+  assert.ok(Number.isFinite(getResult.total));
+});
+
+test("duas instâncias concorrentes no mesmo Product perto do limite de quantidade não ultrapassam o inteiro seguro", async () => {
+  const store = createSharedCartStore({
+    [userId]: {
+      user: userId,
+      items: [{ product: productId, quantity: Number.MAX_SAFE_INTEGER - 1 }]
+    }
+  });
+  const products = new Map([[productId, makeProduct(productId, 0)]]);
+  const ProductModel = makeProductModel(products);
+  const serviceA = new CartService({
+    connect: async () => {},
+    ProductModel,
+    CartModel: makeIsolatedCartModel(store)
+  });
+  const serviceB = new CartService({
+    connect: async () => {},
+    ProductModel,
+    CartModel: makeIsolatedCartModel(store)
+  });
+
+  const [resultA, resultB] = await Promise.allSettled([
+    serviceA.addItem(userId, { productId, quantity: 1 }),
+    serviceB.addItem(userId, { productId, quantity: 1 })
+  ]);
+  const outcomes = [resultA, resultB];
+  const fulfilled = outcomes.filter((outcome) => outcome.status === "fulfilled");
+  const rejected = outcomes.filter((outcome) => outcome.status === "rejected");
+
+  assert.equal(fulfilled.length, 1);
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].reason.status, 409);
+
+  const finalCart = store.carts.get(userId);
+  assert.equal(finalCart.items[0].quantity, Number.MAX_SAFE_INTEGER);
+  assert.ok(Number.isSafeInteger(finalCart.items[0].quantity));
+  assert.equal(finalCart.__v, 1);
+});
+
+test("duas instâncias adicionando Products diferentes sem overflow confirmam ambas via releitura de __v", async () => {
+  const productA = "507f1f77bcf86cd799439023";
+  const productB = "507f1f77bcf86cd799439024";
+  const store = createSharedCartStore({
+    [userId]: { user: userId, items: [] }
+  });
+  const products = new Map([
+    [productA, makeProduct(productA, 9.9)],
+    [productB, makeProduct(productB, 4.5)]
+  ]);
+  const ProductModel = makeProductModel(products);
+  const serviceA = new CartService({
+    connect: async () => {},
+    ProductModel,
+    CartModel: makeIsolatedCartModel(store)
+  });
+  const serviceB = new CartService({
+    connect: async () => {},
+    ProductModel,
+    CartModel: makeIsolatedCartModel(store)
+  });
+
+  await Promise.all([
+    serviceA.addItem(userId, { productId: productA, quantity: 2 }),
+    serviceB.addItem(userId, { productId: productB, quantity: 1 })
+  ]);
+
+  const finalCart = store.carts.get(userId);
+  assert.deepEqual(
+    finalCart.items.map((item) => item.product).sort(),
+    [productA, productB].sort()
+  );
+  assert.equal(finalCart.items.find((item) => item.product === productA).quantity, 2);
+  assert.equal(finalCart.items.find((item) => item.product === productB).quantity, 1);
+  // Cada mutação confirmada incrementa __v uma vez; como nenhuma corrida se
+  // resolveu com o mesmo produto, ambas confirmam na primeira tentativa.
+  assert.equal(finalCart.__v, 2);
+});
+
+test("PUT concorrente com POST no mesmo Product converge para um estado consistente via __v", async () => {
+  const firstReadBarrier = createFirstReadBarrier();
+  const store = createSharedCartStore(
+    {
+      [userId]: { user: userId, items: [{ product: productId, quantity: 2 }] }
+    },
+    { onRead: (read) => firstReadBarrier.observe(read) }
+  );
+  const products = new Map([[productId, makeProduct(productId, 9.9)]]);
+  const ProductModel = makeProductModel(products);
+  const serviceA = new CartService({
+    connect: async () => {},
+    ProductModel,
+    CartModel: makeIsolatedCartModel(store, "PUT")
+  });
+  const serviceB = new CartService({
+    connect: async () => {},
+    ProductModel,
+    CartModel: makeIsolatedCartModel(store, "POST")
+  });
+
+  const pending = Promise.allSettled([
+    serviceA.updateItem(userId, productId, { quantity: 5 }),
+    serviceB.addItem(userId, { productId, quantity: 3 })
+  ]);
+  await firstReadBarrier.ready;
+
+  const firstReadPut = firstReadBarrier.reads.find((read) => read.label === "PUT");
+  const firstReadPost = firstReadBarrier.reads.find((read) => read.label === "POST");
+  assert.ok(firstReadPut);
+  assert.ok(firstReadPost);
+  assert.equal(firstReadPut.version, firstReadPost.version);
+  assert.equal(firstReadPut.version, 0);
+  assert.equal(firstReadBarrier.isReleased, false);
+  assert.equal(store.writes.length, 0);
+
+  firstReadBarrier.release();
+  assert.equal(firstReadBarrier.isReleased, true);
+  const [putResult, postResult] = await pending;
+
+  // Ambas as mutações devem eventualmente confirmar (a perdedora relê e
+  // recalcula contra o estado já atualizado pela vencedora); nenhuma delas
+  // pode lançar um erro inesperado nem sobrescrever a outra silenciosamente.
+  assert.equal(putResult.status, "fulfilled");
+  assert.equal(postResult.status, "fulfilled");
+
+  const firstWrites = store.writes.filter(
+    (write) => write.version === firstReadPut.version
+  );
+  assert.equal(firstWrites.length, 2);
+  assert.equal(firstWrites.filter((write) => write.accepted).length, 1);
+  assert.equal(firstWrites.filter((write) => !write.accepted).length, 1);
+  const losingLabel = firstWrites.find((write) => !write.accepted).label;
+  const losingReads = store.reads.filter((read) => read.label === losingLabel);
+  assert.equal(losingReads.length, 2);
+  assert.equal(losingReads[1].version, firstReadPut.version + 1);
+  assert.equal(store.writes.length, 3);
+
+  const finalCart = store.carts.get(userId);
+  const finalQuantity = finalCart.items.find((item) => item.product === productId).quantity;
+  // Dependendo de qual mutação confirma primeiro, o resultado determinístico
+  // é PUT(5) seguido por POST(+3) = 8, ou POST(+3=5) seguido por PUT(5) = 5.
+  assert.ok([5, 8].includes(finalQuantity));
+  assert.equal(finalCart.__v, 2);
+});
+
+test("clear/remove concorrente com add converge para um estado consistente via __v", async () => {
+  const store = createSharedCartStore({
+    [userId]: { user: userId, items: [{ product: inactiveProductId, quantity: 1 }] }
+  });
+  const products = new Map([
+    [inactiveProductId, makeProduct(inactiveProductId, 9.9)],
+    [productId, makeProduct(productId, 9.9)]
+  ]);
+  const ProductModel = makeProductModel(products);
+  const serviceA = new CartService({
+    connect: async () => {},
+    ProductModel,
+    CartModel: makeIsolatedCartModel(store)
+  });
+  const serviceB = new CartService({
+    connect: async () => {},
+    ProductModel,
+    CartModel: makeIsolatedCartModel(store)
+  });
+
+  const [clearResult, addResult] = await Promise.allSettled([
+    serviceA.clear(userId),
+    serviceB.addItem(userId, { productId, quantity: 1 })
+  ]);
+
+  assert.equal(clearResult.status, "fulfilled");
+  assert.equal(addResult.status, "fulfilled");
+
+  const finalCart = store.carts.get(userId);
+  // Resultado determinístico depende de qual mutação confirma por último:
+  // se clear() vence por último, o carrinho fica vazio; se add() vence por
+  // último (após reler o clear já aplicado), sobra somente o item novo.
+  const productIds = finalCart.items.map((item) => item.product);
+  assert.ok(
+    productIds.length === 0 ||
+      (productIds.length === 1 && productIds[0] === productId)
+  );
+  assert.equal(finalCart.__v, 2);
+});
+
+test("addItem esgota o limite de tentativas de versão e retorna 409 controlado, sem read-modify-write do array inteiro", async () => {
+  let findOneCalls = 0;
+  let writeAttempts = 0;
+  const service = new CartService({
+    connect: async () => {},
+    ProductModel: {
+      findById: async () => product(),
+      find: async () => []
+    },
+    CartModel: {
+      findOne: async () => {
+        findOneCalls += 1;
+        // Sempre devolve um Cart "fresco" sem o item, simulando conflito de
+        // versão permanente (ex.: contenção extrema); nunca expõe o array
+        // completo sendo reescrito.
+        return { user: userId, items: [], __v: findOneCalls };
+      },
+      findOneAndUpdate: async () => {
+        writeAttempts += 1;
+        return null;
+      }
+    }
+  });
+
+  await assert.rejects(
+    () => service.addItem(userId, { productId, quantity: 1 }),
+    (error) => {
+      assert.ok(error instanceof CartConflictError);
+      assert.equal(error.status, 409);
+      assert.match(error.message, /concorrentes/);
+      return true;
+    }
+  );
+  assert.equal(writeAttempts, 5);
 });
 
 test("FavoriteService isola favoritos A e preserva favoritos B", async () => {

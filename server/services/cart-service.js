@@ -28,9 +28,23 @@ class CartCalculationError extends Error {
 }
 
 const MAX_SAFE_CENTS = Number.MAX_SAFE_INTEGER;
+// Limite pequeno e explícito de novas tentativas de concorrência otimista
+// (baseada em __v). Não substitui atomicidade do Mongo: apenas limita quantas
+// vezes o serviço relê/recalcula/tenta de novo antes de responder 409.
+const MAX_VERSION_ATTEMPTS = 5;
 
 function identifier(value) {
   return value && typeof value.toString === "function" ? value.toString() : String(value);
+}
+
+function currentVersion(cart) {
+  return Number.isSafeInteger(cart.__v) ? cart.__v : 0;
+}
+
+function findCartItem(cart, productId) {
+  return (cart.items || []).find(
+    (item) => identifier(item.product) === productId
+  );
 }
 
 function publicProduct(product) {
@@ -79,10 +93,18 @@ class CartService {
   }
 
   async prepareCartModel() {
-    if (typeof this.CartModel.init !== "function") return;
+    if (
+      typeof this.CartModel.createIndexes !== "function" &&
+      typeof this.CartModel.init !== "function"
+    ) return;
     if (!this.cartInitPromise) {
       this.cartInitPromise = Promise.resolve()
-        .then(() => this.CartModel.init())
+        .then(() => {
+          if (typeof this.CartModel.createIndexes === "function") {
+            return this.CartModel.createIndexes();
+          }
+          return this.CartModel.init();
+        })
         .catch(() => {
           this.cartInitPromise = null;
           throw new DatabaseUnavailableError();
@@ -96,6 +118,32 @@ class CartService {
     if (!product) throw new NotFoundError("Produto não encontrado.");
     if (!product.active) throw new CartConflictError("Produto inativo.");
     return product;
+  }
+
+  conflict() {
+    return new CartConflictError(
+      "Não foi possível atualizar o carrinho devido a alterações concorrentes. Tente novamente."
+    );
+  }
+
+  maxQuantityForProduct(product) {
+    const unitPriceCents = moneyToCents(product.price);
+    return unitPriceCents === 0
+      ? MAX_SAFE_CENTS
+      : Math.floor(MAX_SAFE_CENTS / unitPriceCents);
+  }
+
+  async validateProspectiveTotal(cart, product, quantity) {
+    const current = await this.response(cart);
+    const unitPriceCents = moneyToCents(product.price);
+    const additionCents = unitPriceCents * quantity;
+    if (!Number.isSafeInteger(additionCents)) {
+      throw new CartConflictError("Valores do carrinho excedem o limite seguro.");
+    }
+    const currentTotalCents = moneyToCents(current.total);
+    if (!Number.isSafeInteger(currentTotalCents + additionCents)) {
+      throw new CartConflictError("Valores do carrinho excedem o limite seguro.");
+    }
   }
 
   async findProducts(items) {
@@ -169,124 +217,168 @@ class CartService {
     }
   }
 
+  // Concorrência otimista via __v (versionKey do Mongoose). Cada mutação lê o
+  // Cart com sua versão atual, valida/calcula o estado prospectivo em
+  // centavos e grava usando um filtro que exige a MESMA versão lida,
+  // incrementando __v atomicamente na mesma operação. Se outra requisição já
+  // tiver mutado o Cart nesse meio-tempo, o filtro não casa, a operação
+  // retorna null e este método relê/recalcula/tenta de novo, até um limite
+  // pequeno e explícito. Isso garante a invariante entre processos/instâncias
+  // (inclusive serverless), diferente de um mutex em memória.
   async addItem(userId, payload) {
     const input = validateCartItemInput(payload);
     const normalizedUserId = await this.prepareUser(userId);
-    await this.currentProduct(input.productId);
-    await this.getOrCreateCart(normalizedUserId);
-
-    let cart = await this.CartModel.findOneAndUpdate(
-      {
-        user: normalizedUserId,
-        items: {
-          $elemMatch: {
-            product: input.productId,
-            quantity: {
-              $lte: MAX_SAFE_CENTS - input.quantity
-            }
-          }
-        }
-      },
-      {
-        $inc: {
-          "items.$.quantity": input.quantity
-        }
-      },
-      { new: true, runValidators: true }
-    );
-    if (!cart) {
-      cart = await this.CartModel.findOneAndUpdate(
-        {
-          user: normalizedUserId,
-          "items.product": { $ne: input.productId }
-        },
-        {
-          $push: {
-            items: {
-              product: input.productId,
-              quantity: input.quantity
-            }
-          }
-        },
-        { new: true, runValidators: true }
-      );
+    const product = await this.currentProduct(input.productId);
+    const maxQuantity = this.maxQuantityForProduct(product);
+    if (input.quantity > maxQuantity) {
+      throw new CartConflictError("Valores do carrinho excedem o limite seguro.");
     }
-    if (!cart) {
-      cart = await this.CartModel.findOneAndUpdate(
-        {
-          user: normalizedUserId,
-          items: {
-            $elemMatch: {
-              product: input.productId,
-              quantity: {
-              $lte: MAX_SAFE_CENTS - input.quantity
+
+    let cart = await this.getOrCreateCart(normalizedUserId);
+
+    for (let attempt = 0; attempt < MAX_VERSION_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        cart = await this.CartModel.findOne({ user: normalizedUserId });
+        if (!cart) throw new NotFoundError("Carrinho não encontrado.");
+      }
+
+      const version = currentVersion(cart);
+      const existingItem = findCartItem(cart, input.productId);
+
+      if (existingItem) {
+        const nextQuantity = existingItem.quantity + input.quantity;
+        if (!Number.isSafeInteger(nextQuantity) || nextQuantity > maxQuantity) {
+          throw new CartConflictError("Quantidade do carrinho excede o limite seguro.");
+        }
+      }
+      await this.validateProspectiveTotal(cart, product, input.quantity);
+
+      const filter = existingItem
+        ? {
+            user: normalizedUserId,
+            __v: version,
+            items: {
+              $elemMatch: {
+                product: input.productId,
+                quantity: { $lte: maxQuantity - input.quantity }
               }
             }
           }
-        },
-        {
-          $inc: {
-            "items.$.quantity": input.quantity
-          }
-        },
-        { new: true, runValidators: true }
-      );
-    }
-    if (!cart) {
-      const existing = await this.CartModel.findOne({
-        user: normalizedUserId,
-        "items.product": input.productId
+        : {
+            user: normalizedUserId,
+            __v: version,
+            "items.product": { $ne: input.productId }
+          };
+      const update = existingItem
+        ? { $inc: { "items.$.quantity": input.quantity, __v: 1 } }
+        : {
+            $push: { items: { product: input.productId, quantity: input.quantity } },
+            $inc: { __v: 1 }
+          };
+
+      const updated = await this.CartModel.findOneAndUpdate(filter, update, {
+        new: true,
+        runValidators: true
       });
-      if (existing) throw new CartConflictError("Quantidade do carrinho excede o limite seguro.");
-      throw new NotFoundError("Carrinho não encontrado.");
+      if (updated) return this.response(updated);
+      // updated === null: __v mudou (ou o item mudou de estado) entre a
+      // leitura e a gravação. Relê e tenta de novo, nunca fazendo
+      // read-modify-write do array inteiro.
     }
-    return this.response(cart);
+
+    throw this.conflict();
   }
 
   async updateItem(userId, productId, payload) {
     const normalizedProductId = normalizeObjectId(productId, "O produto");
     const { quantity } = validateCartQuantityInput(payload);
     const normalizedUserId = await this.prepareUser(userId);
-    await this.currentProduct(normalizedProductId);
-    const cart = await this.CartModel.findOneAndUpdate(
-      {
-        user: normalizedUserId,
-        "items.product": normalizedProductId
-      },
-      {
-        $set: {
-          "items.$.quantity": quantity
-        }
-      },
-      { new: true, runValidators: true }
-    );
-    if (!cart) throw new NotFoundError("Item não encontrado no carrinho.");
-    return this.response(cart);
+    const product = await this.currentProduct(normalizedProductId);
+    const maxQuantity = this.maxQuantityForProduct(product);
+    if (quantity > maxQuantity) {
+      throw new CartConflictError("Valores do carrinho excedem o limite seguro.");
+    }
+
+    for (let attempt = 0; attempt < MAX_VERSION_ATTEMPTS; attempt += 1) {
+      const cart = await this.CartModel.findOne({ user: normalizedUserId });
+      if (!cart) throw new NotFoundError("Item não encontrado no carrinho.");
+      const existingItem = findCartItem(cart, normalizedProductId);
+      if (!existingItem) throw new NotFoundError("Item não encontrado no carrinho.");
+      const version = currentVersion(cart);
+
+      const current = await this.response(cart);
+      const currentItem = current.items.find(
+        (item) => item.productId === normalizedProductId
+      );
+      const currentTotalCents = moneyToCents(current.total);
+      const unitPriceCents = moneyToCents(product.price);
+      const currentSubtotalCents =
+        currentItem && currentItem.available ? moneyToCents(currentItem.subtotal) : 0;
+      const nextSubtotalCents = unitPriceCents * quantity;
+      const nextTotalCents = currentTotalCents - currentSubtotalCents + nextSubtotalCents;
+      if (!Number.isSafeInteger(nextSubtotalCents) || !Number.isSafeInteger(nextTotalCents)) {
+        throw new CartConflictError("Valores do carrinho excedem o limite seguro.");
+      }
+
+      const updated = await this.CartModel.findOneAndUpdate(
+        {
+          user: normalizedUserId,
+          __v: version,
+          "items.product": normalizedProductId
+        },
+        {
+          $set: { "items.$.quantity": quantity },
+          $inc: { __v: 1 }
+        },
+        { new: true, runValidators: true }
+      );
+      if (updated) return this.response(updated);
+    }
+
+    throw this.conflict();
   }
 
   async removeItem(userId, productId) {
     const normalizedProductId = normalizeObjectId(productId, "O produto");
     const normalizedUserId = await this.prepareUser(userId);
-    await this.CartModel.findOneAndUpdate(
-      { user: normalizedUserId },
-      {
-        $pull: {
-          items: {
-            product: normalizedProductId
-          }
-        }
-      },
-      { new: true }
-    );
+
+    for (let attempt = 0; attempt < MAX_VERSION_ATTEMPTS; attempt += 1) {
+      const cart = await this.CartModel.findOne({ user: normalizedUserId });
+      if (!cart) return;
+      const version = currentVersion(cart);
+      const updated = await this.CartModel.findOneAndUpdate(
+        { user: normalizedUserId, __v: version },
+        {
+          $pull: { items: { product: normalizedProductId } },
+          $inc: { __v: 1 }
+        },
+        { new: true }
+      );
+      if (updated) return;
+    }
+
+    throw this.conflict();
   }
 
   async clear(userId) {
     const normalizedUserId = await this.prepareUser(userId);
-    await this.CartModel.findOneAndUpdate(
-      { user: normalizedUserId },
-      { $set: { items: [] } },
-      { new: true }
-    );
+
+    for (let attempt = 0; attempt < MAX_VERSION_ATTEMPTS; attempt += 1) {
+      const cart = await this.CartModel.findOne({ user: normalizedUserId });
+      if (!cart) return;
+      const version = currentVersion(cart);
+      const updated = await this.CartModel.findOneAndUpdate(
+        { user: normalizedUserId, __v: version },
+        {
+          $set: { items: [] },
+          $inc: { __v: 1 }
+        },
+        { new: true }
+      );
+      if (updated) return;
+    }
+
+    throw this.conflict();
   }
 }
 

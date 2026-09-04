@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { MAX_PRODUCT_PRICE_CENTS } = require("../domain/commerce-limits");
 
 const productSchema = new mongoose.Schema(
   {
@@ -21,8 +22,11 @@ const productSchema = new mongoose.Schema(
       min: 0,
       validate: {
         validator: (value) =>
-          Number.isFinite(value) && Number(value.toFixed(2)) === value,
-        message: "O preço deve ter no máximo 2 casas decimais."
+          Number.isFinite(value) &&
+          Number(value.toFixed(2)) === value &&
+          Number.isSafeInteger(Math.round(value * 100)) &&
+          Math.round(value * 100) <= MAX_PRODUCT_PRICE_CENTS,
+        message: "O preço deve ter no máximo 2 casas decimais e respeitar o limite técnico."
       }
     },
     category: {

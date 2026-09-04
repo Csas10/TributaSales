@@ -1,4 +1,5 @@
 const { ValidacaoErro } = require("../models");
+const { MAX_ITEM_QUANTITY, MAX_PRODUCT_PRICE_CENTS } = require("../domain/commerce-limits");
 
 const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -75,7 +76,11 @@ function normalizePrice(value) {
   ) {
     throw new ValidacaoErro("O preço deve ser um número finito, não negativo e ter no máximo 2 casas.");
   }
-  return Number(value.toFixed(2));
+  const cents = Math.round(value * 100);
+  if (!Number.isSafeInteger(cents) || cents > MAX_PRODUCT_PRICE_CENTS) {
+    throw new ValidacaoErro("O preço excede o limite técnico permitido.");
+  }
+  return cents / 100;
 }
 
 function normalizeBoolean(value, field, fallback) {
@@ -121,6 +126,33 @@ function validateProductInput(payload) {
     active: normalizeBoolean(payload.active, "active", true),
     featured: normalizeBoolean(payload.featured, "featured", false)
   };
+}
+
+function normalizeQuantity(value) {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > MAX_ITEM_QUANTITY
+  ) {
+    throw new ValidacaoErro("A quantidade deve ser um inteiro maior que zero.");
+  }
+  return value;
+}
+
+function validateCartItemInput(payload) {
+  requireObjectPayload(payload);
+  return {
+    productId: normalizeObjectId(payload.productId, "O produto"),
+    quantity: normalizeQuantity(payload.quantity)
+  };
+}
+
+function validateCartQuantityInput(payload) {
+  requireObjectPayload(payload);
+  return { quantity: normalizeQuantity(payload.quantity) };
 }
 
 function validatePassword(password, { required = true } = {}) {
@@ -192,12 +224,15 @@ module.exports = {
   normalizeObjectId,
   normalizePasswordHash,
   normalizePrice,
+  normalizeQuantity,
   normalizeSlug,
   normalizeState,
   requireObjectPayload,
   validateLoginInput,
   validatePassword,
   validateCategoryInput,
+  validateCartItemInput,
+  validateCartQuantityInput,
   validateProductInput,
   validateRegisterInput,
   validateAddressInput,

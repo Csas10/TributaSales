@@ -72,7 +72,6 @@ function normalizePrice(value) {
     typeof value !== "number" ||
     !Number.isFinite(value) ||
     value < 0 ||
-    value > MAX_PRODUCT_PRICE_CENTS / 100 ||
     Number(value.toFixed(2)) !== value
   ) {
     throw new ValidacaoErro("O preço deve ser um número finito, não negativo e ter no máximo 2 casas.");

@@ -335,9 +335,10 @@ test("normaliza os limites de preço e rejeita preço acima do limite técnico",
     normalizePrice(MAX_PRODUCT_PRICE_CENTS / 100),
     MAX_PRODUCT_PRICE_CENTS / 100
   );
-  assert.throws(
-    () => normalizePrice((MAX_PRODUCT_PRICE_CENTS + 1) / 100),
-    /preço/
+  assert.throws(() => normalizePrice((MAX_PRODUCT_PRICE_CENTS + 1) / 100), (error) => {
+    assert.equal(error.message, "O preço excede o limite técnico permitido.");
+    return true;
+  }
   );
   const productWithLimit = new Product({
     name: "Produto limite",
@@ -599,7 +600,10 @@ test("CartService usa preço atual e preserva itens inativos/excluídos na leitu
     ]
   };
   const active = product(productId, { price: 25, active: true });
-  const inactive = product(inactiveProductId, { price: 10, active: false });
+  const inactive = product(inactiveProductId, {
+    price: (MAX_PRODUCT_PRICE_CENTS + 1) / 100,
+    active: false
+  });
   const service = new CartService({
     connect: async () => {},
     CartModel: { findOne: async () => cart },
@@ -618,13 +622,20 @@ test("CartService usa preço atual e preserva itens inativos/excluídos na leitu
   assert.equal(result.items[0].unitPrice, 25);
   assert.equal(result.items[0].subtotal, 50);
   assert.equal(result.items[1].available, false);
+  assert.notEqual(result.items[1].product, null);
   assert.equal(result.items[1].product.active, false);
+  assert.equal(result.items[1].product.price, null);
+  assert.equal(result.items[1].unitPrice, null);
+  assert.equal(result.items[1].subtotal, null);
   assert.equal(result.items[2].product, null);
+  assert.equal(result.items[2].available, false);
+  assert.equal(result.items[2].unitPrice, null);
+  assert.equal(result.items[2].subtotal, null);
   assert.equal(result.unavailableItems, 2);
   assert.equal(result.total, 50);
 });
 
-test("CartService mantém subtotal e total finitos e rejeita overflow monetário", async () => {
+test("CartService mantém subtotal e rejeita Product ativo legado acima do teto", async () => {
   const service = new CartService({
     connect: async () => {},
     ProductModel: {
@@ -644,7 +655,12 @@ test("CartService mantém subtotal e total finitos e rejeita overflow monetário
   const overflowService = new CartService({
     connect: async () => {},
     ProductModel: {
-      find: async () => [product(productId, { price: Number.MAX_SAFE_INTEGER })]
+      find: async () => [
+        product(productId, {
+          price: (MAX_PRODUCT_PRICE_CENTS + 1) / 100,
+          active: true
+        })
+      ]
     },
     CartModel: {}
   });

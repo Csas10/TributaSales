@@ -64,6 +64,17 @@ function publicProduct(product) {
   };
 }
 
+function unavailableProduct(product) {
+  if (!product) return null;
+  const object = typeof product.toObject === "function" ? product.toObject() : product;
+  return {
+    _id: identifier(object._id),
+    name: object.name,
+    price: null,
+    active: object.active
+  };
+}
+
 function moneyToCents(value) {
   if (
     typeof value !== "number" ||
@@ -185,7 +196,7 @@ class CartService {
         unavailableItems += 1;
         return {
           productId: identifier(item.product),
-          product: product ? publicProduct(product) : null,
+          product: unavailableProduct(product),
           quantity,
           available: false,
           unitPrice: null,

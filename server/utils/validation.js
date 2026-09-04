@@ -1,4 +1,5 @@
 const { ValidacaoErro } = require("../models");
+const { MAX_ITEM_QUANTITY, MAX_PRODUCT_PRICE_CENTS } = require("../domain/commerce-limits");
 
 const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -71,11 +72,16 @@ function normalizePrice(value) {
     typeof value !== "number" ||
     !Number.isFinite(value) ||
     value < 0 ||
+    value > MAX_PRODUCT_PRICE_CENTS / 100 ||
     Number(value.toFixed(2)) !== value
   ) {
     throw new ValidacaoErro("O preço deve ser um número finito, não negativo e ter no máximo 2 casas.");
   }
-  return Number(value.toFixed(2));
+  const cents = Math.round(value * 100);
+  if (!Number.isSafeInteger(cents) || cents > MAX_PRODUCT_PRICE_CENTS) {
+    throw new ValidacaoErro("O preço excede o limite técnico permitido.");
+  }
+  return cents / 100;
 }
 
 function normalizeBoolean(value, field, fallback) {
@@ -129,7 +135,8 @@ function normalizeQuantity(value) {
     !Number.isFinite(value) ||
     !Number.isInteger(value) ||
     !Number.isSafeInteger(value) ||
-    value < 1
+    value < 1 ||
+    value > MAX_ITEM_QUANTITY
   ) {
     throw new ValidacaoErro("A quantidade deve ser um inteiro maior que zero.");
   }

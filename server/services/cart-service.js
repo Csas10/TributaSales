@@ -10,6 +10,12 @@ const {
   validateCartItemInput,
   validateCartQuantityInput
 } = require("../utils/validation");
+const {
+  MAX_CART_LINES,
+  MAX_CART_TOTAL_CENTS,
+  MAX_ITEM_QUANTITY,
+  MAX_PRODUCT_PRICE_CENTS
+} = require("../domain/commerce-limits");
 
 class CartConflictError extends Error {
   constructor(message) {
@@ -27,7 +33,6 @@ class CartCalculationError extends Error {
   }
 }
 
-const MAX_SAFE_CENTS = Number.MAX_SAFE_INTEGER;
 // Limite pequeno e explícito de novas tentativas de concorrência otimista
 // (baseada em __v). Não substitui atomicidade do Mongo: apenas limita quantas
 // vezes o serviço relê/recalcula/tenta de novo antes de responder 409.
@@ -50,7 +55,7 @@ function findCartItem(cart, productId) {
 function publicProduct(product) {
   if (!product) return null;
   const object = typeof product.toObject === "function" ? product.toObject() : product;
-  const priceCents = moneyToCents(object.price);
+  const priceCents = productPriceCents(object);
   return {
     _id: identifier(object._id),
     name: object.name,
@@ -70,6 +75,12 @@ function moneyToCents(value) {
   }
   const cents = Math.round(value * 100);
   if (!Number.isSafeInteger(cents)) throw new CartCalculationError();
+  return cents;
+}
+
+function productPriceCents(product) {
+  const cents = moneyToCents(product.price);
+  if (cents > MAX_PRODUCT_PRICE_CENTS) throw new CartCalculationError();
   return cents;
 }
 
@@ -126,22 +137,19 @@ class CartService {
     );
   }
 
-  maxQuantityForProduct(product) {
-    const unitPriceCents = moneyToCents(product.price);
-    return unitPriceCents === 0
-      ? MAX_SAFE_CENTS
-      : Math.floor(MAX_SAFE_CENTS / unitPriceCents);
-  }
-
   async validateProspectiveTotal(cart, product, quantity) {
     const current = await this.response(cart);
-    const unitPriceCents = moneyToCents(product.price);
+    const unitPriceCents = productPriceCents(product);
     const additionCents = unitPriceCents * quantity;
-    if (!Number.isSafeInteger(additionCents)) {
-      throw new CartConflictError("Valores do carrinho excedem o limite seguro.");
-    }
     const currentTotalCents = moneyToCents(current.total);
-    if (!Number.isSafeInteger(currentTotalCents + additionCents)) {
+    if (
+      !Number.isSafeInteger(additionCents) ||
+      additionCents > MAX_CART_TOTAL_CENTS ||
+      !Number.isSafeInteger(currentTotalCents) ||
+      currentTotalCents > MAX_CART_TOTAL_CENTS ||
+      !Number.isSafeInteger(currentTotalCents + additionCents) ||
+      currentTotalCents + additionCents > MAX_CART_TOTAL_CENTS
+    ) {
       throw new CartConflictError("Valores do carrinho excedem o limite seguro.");
     }
   }
@@ -156,12 +164,23 @@ class CartService {
 
   async response(cart) {
     if (!cart) return { items: [], total: 0, unavailableItems: 0 };
-    const products = await this.findProducts(cart.items || []);
-    let total = 0;
+    const cartItems = cart.items || [];
+    if (!Array.isArray(cartItems) || cartItems.length > MAX_CART_LINES) {
+      throw new CartCalculationError();
+    }
+    const products = await this.findProducts(cartItems);
+    let totalCents = 0;
     let unavailableItems = 0;
-    const items = (cart.items || []).map((item) => {
+    const items = cartItems.map((item) => {
       const product = products.get(identifier(item.product));
       const quantity = item.quantity;
+      if (
+        !Number.isSafeInteger(quantity) ||
+        quantity < 1 ||
+        quantity > MAX_ITEM_QUANTITY
+      ) {
+        throw new CartCalculationError();
+      }
       if (!product || !product.active) {
         unavailableItems += 1;
         return {
@@ -173,17 +192,24 @@ class CartService {
           subtotal: null
         };
       }
-      if (!Number.isSafeInteger(quantity) || quantity < 1) {
+      const unitPriceCents = productPriceCents(product);
+      const subtotalCents = unitPriceCents * quantity;
+      if (
+        !Number.isSafeInteger(subtotalCents) ||
+        subtotalCents > MAX_CART_TOTAL_CENTS
+      ) {
         throw new CartCalculationError();
       }
-      const unitPriceCents = moneyToCents(product.price);
-      const subtotalCents = unitPriceCents * quantity;
-      if (!Number.isSafeInteger(subtotalCents)) throw new CartCalculationError();
-      const totalCents = moneyToCents(total) + subtotalCents;
-      if (!Number.isSafeInteger(totalCents)) throw new CartCalculationError();
+      const nextTotalCents = totalCents + subtotalCents;
+      if (
+        !Number.isSafeInteger(nextTotalCents) ||
+        nextTotalCents > MAX_CART_TOTAL_CENTS
+      ) {
+        throw new CartCalculationError();
+      }
       const unitPrice = unitPriceCents / 100;
       const subtotal = subtotalCents / 100;
-      total = totalCents / 100;
+      totalCents = nextTotalCents;
       return {
         productId: identifier(item.product),
         product: publicProduct(product),
@@ -193,7 +219,7 @@ class CartService {
         subtotal
       };
     });
-    return { items, total, unavailableItems };
+    return { items, total: totalCents / 100, unavailableItems };
   }
 
   async get(userId) {
@@ -229,10 +255,6 @@ class CartService {
     const input = validateCartItemInput(payload);
     const normalizedUserId = await this.prepareUser(userId);
     const product = await this.currentProduct(input.productId);
-    const maxQuantity = this.maxQuantityForProduct(product);
-    if (input.quantity > maxQuantity) {
-      throw new CartConflictError("Valores do carrinho excedem o limite seguro.");
-    }
 
     let cart = await this.getOrCreateCart(normalizedUserId);
 
@@ -247,9 +269,14 @@ class CartService {
 
       if (existingItem) {
         const nextQuantity = existingItem.quantity + input.quantity;
-        if (!Number.isSafeInteger(nextQuantity) || nextQuantity > maxQuantity) {
+        if (
+          !Number.isSafeInteger(nextQuantity) ||
+          nextQuantity > MAX_ITEM_QUANTITY
+        ) {
           throw new CartConflictError("Quantidade do carrinho excede o limite seguro.");
         }
+      } else if ((cart.items || []).length >= MAX_CART_LINES) {
+        throw new CartConflictError("O carrinho atingiu o limite técnico de linhas.");
       }
       await this.validateProspectiveTotal(cart, product, input.quantity);
 
@@ -260,7 +287,7 @@ class CartService {
             items: {
               $elemMatch: {
                 product: input.productId,
-                quantity: { $lte: maxQuantity - input.quantity }
+                quantity: { $lte: MAX_ITEM_QUANTITY - input.quantity }
               }
             }
           }
@@ -294,10 +321,6 @@ class CartService {
     const { quantity } = validateCartQuantityInput(payload);
     const normalizedUserId = await this.prepareUser(userId);
     const product = await this.currentProduct(normalizedProductId);
-    const maxQuantity = this.maxQuantityForProduct(product);
-    if (quantity > maxQuantity) {
-      throw new CartConflictError("Valores do carrinho excedem o limite seguro.");
-    }
 
     for (let attempt = 0; attempt < MAX_VERSION_ATTEMPTS; attempt += 1) {
       const cart = await this.CartModel.findOne({ user: normalizedUserId });
@@ -311,12 +334,17 @@ class CartService {
         (item) => item.productId === normalizedProductId
       );
       const currentTotalCents = moneyToCents(current.total);
-      const unitPriceCents = moneyToCents(product.price);
+      const unitPriceCents = productPriceCents(product);
       const currentSubtotalCents =
         currentItem && currentItem.available ? moneyToCents(currentItem.subtotal) : 0;
       const nextSubtotalCents = unitPriceCents * quantity;
       const nextTotalCents = currentTotalCents - currentSubtotalCents + nextSubtotalCents;
-      if (!Number.isSafeInteger(nextSubtotalCents) || !Number.isSafeInteger(nextTotalCents)) {
+      if (
+        !Number.isSafeInteger(nextSubtotalCents) ||
+        nextSubtotalCents > MAX_CART_TOTAL_CENTS ||
+        !Number.isSafeInteger(nextTotalCents) ||
+        nextTotalCents > MAX_CART_TOTAL_CENTS
+      ) {
         throw new CartConflictError("Valores do carrinho excedem o limite seguro.");
       }
 

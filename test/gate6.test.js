@@ -21,10 +21,17 @@ const {
 const { ForbiddenError } = require("../server/utils/auth-errors");
 const authorize = require("../server/middleware/authorize");
 const {
+  normalizePrice,
   normalizeQuantity,
   validateCartItemInput,
   validateCartQuantityInput
 } = require("../server/utils/validation");
+const {
+  MAX_CART_LINES,
+  MAX_CART_TOTAL_CENTS,
+  MAX_ITEM_QUANTITY,
+  MAX_PRODUCT_PRICE_CENTS
+} = require("../server/domain/commerce-limits");
 
 const userId = "507f1f77bcf86cd799439011";
 const productId = "507f1f77bcf86cd799439012";
@@ -253,8 +260,8 @@ test("valida itens de Cart com ObjectId e quantidade estritos", () => {
 });
 
 test("rejeita quantity fora da faixa segura e aceita inteiro seguro", () => {
-  assert.equal(normalizeQuantity(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER);
-  assert.throws(() => normalizeQuantity(Number.MAX_SAFE_INTEGER + 1), /quantidade/);
+  assert.equal(normalizeQuantity(MAX_ITEM_QUANTITY), MAX_ITEM_QUANTITY);
+  assert.throws(() => normalizeQuantity(MAX_ITEM_QUANTITY + 1), /quantidade/);
   assert.throws(() => normalizeQuantity(1e308), /quantidade/);
 });
 
@@ -263,10 +270,87 @@ test("Cart schema rejeita quantity fora da faixa segura", () => {
     user: new mongoose.Types.ObjectId(userId),
     items: [{
       product: new mongoose.Types.ObjectId(productId),
-      quantity: Number.MAX_SAFE_INTEGER + 1
+      quantity: MAX_ITEM_QUANTITY + 1
     }]
   });
   assert.ok(cart.validateSync().errors["items.0.quantity"]);
+});
+
+test("limites técnicos de comércio mantêm o pior caso dentro da faixa segura", async () => {
+  assert.equal(
+    MAX_CART_LINES * MAX_ITEM_QUANTITY * MAX_PRODUCT_PRICE_CENTS,
+    MAX_CART_TOTAL_CENTS
+  );
+  assert.ok(Number.isSafeInteger(MAX_CART_TOTAL_CENTS));
+  assert.ok(MAX_CART_TOTAL_CENTS <= Number.MAX_SAFE_INTEGER);
+
+  const items = Array.from({ length: MAX_CART_LINES }, (_, index) => ({
+    product: `507f1f77bcf86cd79943${String(index).padStart(4, "0")}`,
+    quantity: MAX_ITEM_QUANTITY
+  }));
+  const products = new Map(
+    items.map((item) => [
+      item.product,
+      product(item.product, { price: MAX_PRODUCT_PRICE_CENTS / 100 })
+    ])
+  );
+  const service = new CartService({
+    connect: async () => {},
+    ProductModel: {
+      find: async (filter) => filter._id.$in.map((id) => products.get(id))
+    },
+    CartModel: {}
+  });
+
+  const result = await service.response({ items });
+  const serialized = JSON.parse(JSON.stringify(result));
+  assert.equal(result.items.length, MAX_CART_LINES);
+  assert.equal(result.total, MAX_CART_TOTAL_CENTS / 100);
+  assert.ok(result.items.every((item) => Number.isSafeInteger(item.subtotal * 100)));
+  assert.ok(Number.isSafeInteger(result.total * 100));
+  assert.equal(serialized.items.some((item) => item.subtotal === null), false);
+  assert.notEqual(serialized.total, null);
+});
+
+test("Cart schema aceita MAX_CART_LINES e rejeita uma linha adicional", () => {
+  const makeItems = (count) =>
+    Array.from({ length: count }, () => ({
+      product: new mongoose.Types.ObjectId(),
+      quantity: MAX_ITEM_QUANTITY
+    }));
+  const validCart = new Cart({
+    user: new mongoose.Types.ObjectId(userId),
+    items: makeItems(MAX_CART_LINES)
+  });
+  const invalidCart = new Cart({
+    user: new mongoose.Types.ObjectId(userId),
+    items: makeItems(MAX_CART_LINES + 1)
+  });
+  assert.equal(validCart.validateSync()?.errors?.items, undefined);
+  assert.ok(invalidCart.validateSync().errors.items);
+});
+
+test("normaliza os limites de preço e rejeita preço acima do limite técnico", () => {
+  assert.equal(
+    normalizePrice(MAX_PRODUCT_PRICE_CENTS / 100),
+    MAX_PRODUCT_PRICE_CENTS / 100
+  );
+  assert.throws(
+    () => normalizePrice((MAX_PRODUCT_PRICE_CENTS + 1) / 100),
+    /preço/
+  );
+  const productWithLimit = new Product({
+    name: "Produto limite",
+    price: MAX_PRODUCT_PRICE_CENTS / 100,
+    category: new mongoose.Types.ObjectId()
+  });
+  const productAboveLimit = new Product({
+    name: "Produto acima",
+    price: (MAX_PRODUCT_PRICE_CENTS + 1) / 100,
+    category: new mongoose.Types.ObjectId()
+  });
+  assert.equal(productWithLimit.validateSync()?.errors?.price, undefined);
+  assert.ok(productAboveLimit.validateSync().errors.price);
 });
 
 test("CartModel.init é aguardado e compartilhado entre preparações concorrentes", async () => {
@@ -572,13 +656,14 @@ test("CartService mantém subtotal e total finitos e rejeita overflow monetário
   );
 });
 
-test("CartService rejeita subtotal inseguro antes da mutação", async () => {
+test("CartService rejeita preço persistido fora do limite antes da mutação", async () => {
   const cart = { user: userId, items: [] };
   let writes = 0;
   const service = new CartService({
     connect: async () => {},
     ProductModel: {
-      findById: async () => product(productId, { price: 19.99 }),
+      findById: async () =>
+        product(productId, { price: (MAX_PRODUCT_PRICE_CENTS + 1) / 100 }),
       find: async () => []
     },
     CartModel: {
@@ -594,20 +679,16 @@ test("CartService rejeita subtotal inseguro antes da mutação", async () => {
   });
 
   await assert.rejects(
-    () => service.addItem(userId, { productId, quantity: Number.MAX_SAFE_INTEGER }),
-    (error) => {
-      assert.ok(error instanceof CartConflictError);
-      assert.equal(error.status, 409);
-      return true;
-    }
+    () => service.addItem(userId, { productId, quantity: MAX_ITEM_QUANTITY }),
+    CartCalculationError
   );
   assert.equal(writes, 0);
   assert.deepEqual(cart.items, []);
 });
 
-test("CartService rejeita total combinado inseguro antes de duas mutações concorrentes", async () => {
+test("CartService rejeita total persistido com preço fora do limite antes da mutação", async () => {
   const existingProductId = "507f1f77bcf86cd799439015";
-  const largePrice = (Number.MAX_SAFE_INTEGER - 1) / 100;
+  const invalidPrice = (MAX_PRODUCT_PRICE_CENTS + 1) / 100;
   const cart = {
     user: userId,
     items: [{ product: existingProductId, quantity: 1 }]
@@ -616,8 +697,8 @@ test("CartService rejeita total combinado inseguro antes de duas mutações conc
   const service = new CartService({
     connect: async () => {},
     ProductModel: {
-      findById: async (id) => product(id, { price: 0.02 }),
-      find: async () => [product(existingProductId, { price: largePrice })]
+      findById: async (id) => product(id, { price: invalidPrice }),
+      find: async () => [product(existingProductId, { price: invalidPrice })]
     },
     CartModel: {
       findOne: async () => cart,
@@ -629,12 +710,8 @@ test("CartService rejeita total combinado inseguro antes de duas mutações conc
   });
 
   await assert.rejects(
-    () =>
-      Promise.all([
-        service.addItem(userId, { productId, quantity: 1 }),
-        service.addItem(userId, { productId, quantity: 1 })
-      ]),
-    CartConflictError
+    () => service.addItem(userId, { productId, quantity: 1 }),
+    CartCalculationError
   );
   assert.equal(writes, 0);
   assert.deepEqual(cart.items, [{ product: existingProductId, quantity: 1 }]);
@@ -747,7 +824,7 @@ test("CartService adiciona item existente com $inc posicional", async () => {
 test("CartService rejeita atomicamente overflow de quantidade sem gravar", async () => {
   const cart = {
     user: userId,
-    items: [{ product: productId, quantity: Number.MAX_SAFE_INTEGER }]
+    items: [{ product: productId, quantity: MAX_ITEM_QUANTITY }]
   };
   const operations = [];
   const service = new CartService({
@@ -774,13 +851,13 @@ test("CartService rejeita atomicamente overflow de quantidade sem gravar", async
     }
   );
   assert.equal(operations.length, 0);
-  assert.equal(cart.items[0].quantity, Number.MAX_SAFE_INTEGER);
+  assert.equal(cart.items[0].quantity, MAX_ITEM_QUANTITY);
 });
 
 test("adições concorrentes próximas ao limite não ultrapassam inteiro seguro", async () => {
   const cart = {
     user: userId,
-    items: [{ product: productId, quantity: Number.MAX_SAFE_INTEGER - 2 }]
+    items: [{ product: productId, quantity: MAX_ITEM_QUANTITY - 2 }]
   };
   const service = new CartService({
     connect: async () => {},
@@ -801,7 +878,7 @@ test("adições concorrentes próximas ao limite não ultrapassam inteiro seguro
     service.addItem(userId, { productId, quantity: 1 }),
     service.addItem(userId, { productId, quantity: 1 })
   ]);
-  assert.equal(cart.items[0].quantity, Number.MAX_SAFE_INTEGER);
+  assert.equal(cart.items[0].quantity, MAX_ITEM_QUANTITY);
   assert.ok(Number.isSafeInteger(cart.items[0].quantity));
 });
 
@@ -1110,21 +1187,18 @@ function makeIsolatedCartModel(store, label) {
   };
 }
 
-test("duas instâncias de CartService preservam o total seguro quando a soma combinada estouraria Number.MAX_SAFE_INTEGER", async () => {
-  const existingProductId = "507f1f77bcf86cd799439020";
+test("duas instâncias de CartService preservam o total seguro em CAS concorrente", async () => {
   const productA = "507f1f77bcf86cd799439021";
   const productB = "507f1f77bcf86cd799439022";
-  const largePrice = (Number.MAX_SAFE_INTEGER - 3) / 100;
   const firstReadBarrier = createFirstReadBarrier();
 
   const store = createSharedCartStore(
     {
-      [userId]: { user: userId, items: [{ product: existingProductId, quantity: 1 }] }
+      [userId]: { user: userId, items: [] }
     },
     { onRead: (read) => firstReadBarrier.observe(read) }
   );
   const products = new Map([
-    [existingProductId, makeProduct(existingProductId, largePrice)],
     [productA, makeProduct(productA, 0.02)],
     [productB, makeProduct(productB, 0.02)]
   ]);
@@ -1164,15 +1238,11 @@ test("duas instâncias de CartService preservam o total seguro quando a soma com
   const fulfilled = outcomes.filter((outcome) => outcome.status === "fulfilled");
   const rejected = outcomes.filter((outcome) => outcome.status === "rejected");
 
-  // Ambas leram o mesmo total inicial (MAX_SAFE_INTEGER - 3 centavos) e, de
-  // forma isolada, cada adição de 2 centavos parecia seguro. Apenas uma
-  // mutação pode de fato confirmar (via __v); a outra reler o total já
-  // atualizado, perceber que excederia o limite seguro e retornar 409 ANTES
-  // de qualquer gravação — nunca as duas persistem.
-  assert.equal(fulfilled.length, 1);
-  assert.equal(rejected.length, 1);
-  assert.ok(rejected[0].reason instanceof CartConflictError);
-  assert.equal(rejected[0].reason.status, 409);
+  // Ambas leram a mesma versão antes de qualquer escrita. Uma mutação vence
+  // o CAS, a outra perde, relê a versão nova e confirma sem ultrapassar os
+  // limites técnicos.
+  assert.equal(fulfilled.length, 2);
+  assert.equal(rejected.length, 0);
 
   const firstWrites = store.writes.filter(
     (write) => write.version === firstReadA.version
@@ -1185,18 +1255,18 @@ test("duas instâncias de CartService preservam o total seguro quando a soma com
   const losingReads = store.reads.filter((read) => read.label === losingLabel);
   assert.equal(losingReads.length, 2);
   assert.equal(losingReads[1].version, firstReadA.version + 1);
-  assert.equal(store.writes.length, 2);
+  assert.equal(store.writes.length, 3);
 
   const finalCart = store.carts.get(userId);
   assert.equal(finalCart.items.length, 2);
-  assert.equal(finalCart.__v, 1);
+  assert.equal(finalCart.__v, 2);
 
   const totalCents = finalCart.items.reduce((sum, item) => {
     const priceCents = Math.round(products.get(item.product).price * 100);
     return sum + priceCents * item.quantity;
   }, 0);
   assert.ok(Number.isSafeInteger(totalCents));
-  assert.equal(totalCents, Number.MAX_SAFE_INTEGER - 1);
+  assert.equal(totalCents, 4);
 
   // GET posterior nunca lança CartCalculationError, mesmo perto do limite.
   const verifyService = new CartService({
@@ -1212,7 +1282,7 @@ test("duas instâncias concorrentes no mesmo Product perto do limite de quantida
   const store = createSharedCartStore({
     [userId]: {
       user: userId,
-      items: [{ product: productId, quantity: Number.MAX_SAFE_INTEGER - 1 }]
+      items: [{ product: productId, quantity: MAX_ITEM_QUANTITY - 1 }]
     }
   });
   const products = new Map([[productId, makeProduct(productId, 0)]]);
@@ -1241,9 +1311,169 @@ test("duas instâncias concorrentes no mesmo Product perto do limite de quantida
   assert.equal(rejected[0].reason.status, 409);
 
   const finalCart = store.carts.get(userId);
-  assert.equal(finalCart.items[0].quantity, Number.MAX_SAFE_INTEGER);
+  assert.equal(finalCart.items[0].quantity, MAX_ITEM_QUANTITY);
   assert.ok(Number.isSafeInteger(finalCart.items[0].quantity));
   assert.equal(finalCart.__v, 1);
+});
+
+test("quantidade máxima continua segura depois de repricing para o preço máximo", async () => {
+  const products = new Map([
+    [productId, makeProduct(productId, 0)]
+  ]);
+  const store = createSharedCartStore({
+    [userId]: { user: userId, items: [] }
+  });
+  const ProductModel = makeProductModel(products);
+  const service = new CartService({
+    connect: async () => {},
+    ProductModel,
+    CartModel: makeIsolatedCartModel(store)
+  });
+
+  await service.addItem(userId, {
+    productId,
+    quantity: MAX_ITEM_QUANTITY
+  });
+  products.set(
+    productId,
+    makeProduct(productId, MAX_PRODUCT_PRICE_CENTS / 100)
+  );
+
+  const result = await service.get(userId);
+  const serialized = JSON.parse(JSON.stringify(result));
+  assert.equal(result.items[0].quantity, MAX_ITEM_QUANTITY);
+  assert.equal(
+    result.items[0].subtotal,
+    MAX_ITEM_QUANTITY * MAX_PRODUCT_PRICE_CENTS / 100
+  );
+  assert.ok(Number.isFinite(result.items[0].subtotal));
+  assert.ok(Number.isFinite(result.total));
+  assert.notEqual(serialized.items[0].subtotal, null);
+  assert.notEqual(serialized.total, null);
+});
+
+test("repricing entre currentProduct e CAS mantém mutação e resposta seguras", async () => {
+  const products = new Map([
+    [productId, makeProduct(productId, 0)]
+  ]);
+  const store = createSharedCartStore({
+    [userId]: { user: userId, items: [] }
+  });
+  let changed = false;
+  const ProductModel = makeProductModel(products);
+  const baseCartModel = makeIsolatedCartModel(store);
+  const CartModel = {
+    findOne: baseCartModel.findOne,
+    findOneAndUpdate: async (filter, update) => {
+      if (!changed) {
+        changed = true;
+        products.set(
+          productId,
+          makeProduct(productId, MAX_PRODUCT_PRICE_CENTS / 100)
+        );
+      }
+      return baseCartModel.findOneAndUpdate(filter, update);
+    }
+  };
+  const service = new CartService({ connect: async () => {}, ProductModel, CartModel });
+
+  const result = await service.addItem(userId, {
+    productId,
+    quantity: MAX_ITEM_QUANTITY
+  });
+  assert.equal(result.items[0].subtotal, MAX_ITEM_QUANTITY * MAX_PRODUCT_PRICE_CENTS / 100);
+  assert.ok(Number.isFinite(result.total));
+  assert.equal(store.carts.get(userId).__v, 1);
+});
+
+test("repricing depois do CAS e antes da response mantém a resposta segura", async () => {
+  const products = new Map([
+    [productId, makeProduct(productId, 0)]
+  ]);
+  const store = createSharedCartStore({
+    [userId]: { user: userId, items: [] }
+  });
+  let changed = false;
+  const baseCartModel = makeIsolatedCartModel(store);
+  const ProductModel = makeProductModel(products);
+  const CartModel = {
+    findOne: baseCartModel.findOne,
+    findOneAndUpdate: async (filter, update) => {
+      const updated = await baseCartModel.findOneAndUpdate(filter, update);
+      if (!changed) {
+        changed = true;
+        products.set(
+          productId,
+          makeProduct(productId, MAX_PRODUCT_PRICE_CENTS / 100)
+        );
+      }
+      return updated;
+    }
+  };
+  const service = new CartService({ connect: async () => {}, ProductModel, CartModel });
+
+  const result = await service.addItem(userId, {
+    productId,
+    quantity: MAX_ITEM_QUANTITY
+  });
+  const serialized = JSON.parse(JSON.stringify(result));
+  assert.ok(Number.isFinite(result.items[0].subtotal));
+  assert.ok(Number.isFinite(result.total));
+  assert.notEqual(serialized.items[0].subtotal, null);
+  assert.notEqual(serialized.total, null);
+});
+
+test("duas instâncias concorrentes com uma vaga confirmam somente uma nova linha", async () => {
+  const existingItems = Array.from({ length: MAX_CART_LINES - 1 }, (_, index) => {
+    const id = `507f1f77bcf86cd79944${String(index).padStart(4, "0")}`;
+    return { product: id, quantity: 1 };
+  });
+  const productA = "507f1f77bcf86cd799440998";
+  const productB = "507f1f77bcf86cd799440999";
+  const products = new Map(
+    existingItems.map((item) => [item.product, makeProduct(item.product, 0)])
+  );
+  products.set(productA, makeProduct(productA, 0));
+  products.set(productB, makeProduct(productB, 0));
+  const firstReadBarrier = createFirstReadBarrier();
+  const store = createSharedCartStore(
+    { [userId]: { user: userId, items: existingItems } },
+    { onRead: (read) => firstReadBarrier.observe(read) }
+  );
+  const ProductModel = makeProductModel(products);
+  const serviceA = new CartService({
+    connect: async () => {},
+    ProductModel,
+    CartModel: makeIsolatedCartModel(store, "A")
+  });
+  const serviceB = new CartService({
+    connect: async () => {},
+    ProductModel,
+    CartModel: makeIsolatedCartModel(store, "B")
+  });
+
+  const pending = Promise.allSettled([
+    serviceA.addItem(userId, { productId: productA, quantity: 1 }),
+    serviceB.addItem(userId, { productId: productB, quantity: 1 })
+  ]);
+  await firstReadBarrier.ready;
+  const firstReads = firstReadBarrier.reads;
+  assert.equal(firstReads.length, 2);
+  assert.equal(firstReads[0].version, firstReads[1].version);
+  assert.equal(store.writes.length, 0);
+  firstReadBarrier.release();
+
+  const outcomes = await pending;
+  assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+  assert.equal(outcomes.filter((outcome) => outcome.status === "rejected").length, 1);
+  assert.equal(
+    outcomes.find((outcome) => outcome.status === "rejected").reason.status,
+    409
+  );
+  assert.equal(store.carts.get(userId).items.length, MAX_CART_LINES);
+  assert.equal(store.carts.get(userId).__v, 1);
+  assert.equal(store.writes.filter((write) => write.accepted).length, 1);
+  assert.equal(store.writes.filter((write) => !write.accepted).length, 1);
 });
 
 test("duas instâncias adicionando Products diferentes sem overflow confirmam ambas via releitura de __v", async () => {

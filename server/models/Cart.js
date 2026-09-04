@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { MAX_CART_LINES, MAX_ITEM_QUANTITY } = require("../domain/commerce-limits");
 
 const cartItemSchema = new mongoose.Schema(
   {
@@ -13,8 +14,10 @@ const cartItemSchema = new mongoose.Schema(
       min: 1,
       validate: {
         validator: (value) =>
-          Number.isSafeInteger(value) && value >= 1,
-        message: "A quantidade deve ser um inteiro maior que zero."
+          Number.isSafeInteger(value) &&
+          value >= 1 &&
+          value <= MAX_ITEM_QUANTITY,
+        message: "A quantidade deve ser um inteiro dentro do limite técnico."
       }
     }
   },
@@ -32,7 +35,11 @@ const cartSchema = new mongoose.Schema(
     },
     items: {
       type: [cartItemSchema],
-      default: []
+      default: [],
+      validate: {
+        validator: (value) => Array.isArray(value) && value.length <= MAX_CART_LINES,
+        message: "O carrinho excede o limite técnico de linhas."
+      }
     }
   },
   { timestamps: true }

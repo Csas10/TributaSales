@@ -12,6 +12,7 @@ const { AuthService } = require("./services/auth-service");
 const { UserService } = require("./services/user-service");
 const { AddressService } = require("./services/address-service");
 const { CartService } = require("./services/cart-service");
+const { UserOrderService } = require("./services/user-order-service");
 const { FavoriteService } = require("./services/favorite-service");
 const { CatalogProductService } = require("./services/catalog-product-service");
 const { CategoryService } = require("./services/category-service");
@@ -19,6 +20,11 @@ const AuthController = require("./controllers/auth-controller");
 const UserController = require("./controllers/user-controller");
 const AddressController = require("./controllers/address-controller");
 const CartController = require("./controllers/cart-controller");
+const UserOrderController = require("./controllers/user-order-controller");
+const Order = require("./models/Order");
+const Cart = require("./models/Cart");
+const Product = require("./models/Product");
+const Address = require("./models/Address");
 const FavoriteController = require("./controllers/favorite-controller");
 const CatalogProductController = require("./controllers/catalog-product-controller");
 const CatalogCategoryController = require("./controllers/catalog-category-controller");
@@ -54,6 +60,13 @@ const cartService = new CartService({
 const favoriteService = new FavoriteService({
   connect: requireDatabase
 });
+const userOrderService = new UserOrderService({
+  connect: requireDatabase,
+  OrderModel: Order,
+  CartModel: Cart,
+  ProductModel: Product,
+  AddressModel: Address
+});
 const catalogProductService = new CatalogProductService({
   connect: requireDatabase
 });
@@ -80,7 +93,8 @@ app.use(
     new AddressController(addressService),
     authenticate,
     new FavoriteController(favoriteService),
-    new CartController(cartService)
+    new CartController(cartService),
+    new UserOrderController(userOrderService)
   )
 );
 app.use(

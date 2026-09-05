@@ -6,7 +6,8 @@ function userRoutes(
   addressController,
   authenticate,
   favoriteController,
-  cartController
+  cartController,
+  orderController
 ) {
   const router = express.Router();
   router.get("/me", authenticate, asyncHandler(userController.me.bind(userController)));
@@ -62,6 +63,31 @@ function userRoutes(
     asyncHandler(cartController.removeItem)
   );
   router.delete("/me/cart", authenticate, asyncHandler(cartController.clear));
+  router.get(
+    "/me/orders",
+    authenticate,
+    asyncHandler(orderController.list)
+  );
+  router.post(
+    "/me/orders",
+    authenticate,
+    asyncHandler(orderController.create)
+  );
+  router.get(
+    "/me/orders/:id",
+    authenticate,
+    asyncHandler(orderController.get)
+  );
+  router.patch(
+    "/me/orders/:id/cancel",
+    authenticate,
+    asyncHandler(orderController.cancel)
+  );
+  router.patch(
+    "/me/orders/:id/status",
+    authenticate,
+    asyncHandler(orderController.cancel)
+  );
   return router;
 }
 

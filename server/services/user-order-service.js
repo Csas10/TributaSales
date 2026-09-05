@@ -49,8 +49,8 @@ function cents(value) {
 }
 
 function versionOf(cart) {
-  const version = cart && cart.__v;
-  if (version == null) return 0;
+  if (!cart) throw new OrderConflictError("Carrinho não encontrado.");
+  const version = cart.__v;
   if (!Number.isSafeInteger(version) || version < 0) {
     throw new OrderConflictError("A versão do carrinho é inválida.");
   }
@@ -196,17 +196,15 @@ class UserOrderService {
       throw new OrderConflictError("O pedido deve receber somente addressId.");
     }
     const cart = await this.CartModel.findOne({ user: normalizedUserId });
+    if (!cart) throw new OrderConflictError("Carrinho não encontrado.");
+    if (!Array.isArray(cart.items) || cart.items.length === 0) {
+      throw new OrderConflictError("Não é possível criar pedido com carrinho vazio.");
+    }
     const sourceCartVersion = versionOf(cart);
     let order = await this.OrderModel.findOne({
       user: normalizedUserId,
       sourceCartVersion
     });
-    if (!order && cart && (!Array.isArray(cart.items) || cart.items.length === 0)) {
-      order = await this.OrderModel.findOne({
-        user: normalizedUserId,
-        sourceCartVersion: sourceCartVersion - 1
-      });
-    }
     if (order) {
       await this.clearCartCas(normalizedUserId, order.sourceCartVersion);
       return order;

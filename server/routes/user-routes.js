@@ -83,11 +83,6 @@ function userRoutes(
     authenticate,
     asyncHandler(orderController.cancel)
   );
-  router.patch(
-    "/me/orders/:id/status",
-    authenticate,
-    asyncHandler(orderController.cancel)
-  );
   return router;
 }
 

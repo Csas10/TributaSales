@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const {
+  MAX_CART_LINES,
   MAX_CART_TOTAL_CENTS,
   MAX_ITEM_QUANTITY,
   MAX_PRODUCT_PRICE_CENTS
@@ -99,7 +100,7 @@ const orderSchema = new mongoose.Schema(
           Array.isArray(value) &&
           value.length >= 1 &&
           value.length <= MAX_CART_LINES,
-        message: "O pedido deve conter entre 1 e MAX_CART_LINES itens."
+        message: `O pedido deve conter entre 1 e ${MAX_CART_LINES} itens.`
       }
     },
     totalCents: {

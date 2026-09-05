@@ -136,6 +136,47 @@ test("checkout rejeita carrinho ou produto inválido sem criar pedido", async ()
   assert.equal(creates, 0);
 });
 
+test("checkout não infere retry para carrinho vazio com Order anterior", async () => {
+  const value = fixtures();
+  const queriedVersions = [];
+  const service = new UserOrderService({
+    connect: async () => {},
+    CartModel: { findOne: async () => ({ ...value.cart, items: [] }) },
+    OrderModel: {
+      findOne: async (filter) => {
+        queriedVersions.push(filter.sourceCartVersion);
+        return { _id: "old-order", sourceCartVersion: 3 };
+      }
+    }
+  });
+
+  await assert.rejects(
+    () => service.create(userId, { addressId }),
+    { status: 409 }
+  );
+  assert.deepEqual(queriedVersions, []);
+});
+
+test("checkout não infere versão zero para carrinho inexistente", async () => {
+  const queried = [];
+  const service = new UserOrderService({
+    connect: async () => {},
+    CartModel: { findOne: async () => null },
+    OrderModel: {
+      findOne: async (filter) => {
+        queried.push(filter);
+        return { _id: "old-order", sourceCartVersion: 0 };
+      }
+    }
+  });
+
+  await assert.rejects(
+    () => service.create(userId, { addressId }),
+    { status: 409 }
+  );
+  assert.deepEqual(queried, []);
+});
+
 test("checkout aceita somente addressId e rejeita campos de cliente", async () => {
   const value = fixtures();
   const service = new UserOrderService({
@@ -160,7 +201,7 @@ test("checkout aceita somente addressId e rejeita campos de cliente", async () =
   }
 });
 
-test("checkout é idempotente e não limpa alterações concorrentes", async () => {
+test("retry da mesma versão preserva alterações quando o clear CAS não casa", async () => {
   const value = fixtures();
   const updates = [];
   const existing = { _id: "order-1", user: userId, sourceCartVersion: 4 };
@@ -206,7 +247,9 @@ test("Order exige entre uma e MAX_CART_LINES linhas e cancelledAt nulo por padr�
     },
     totalCents: 100
   };
-  assert.ok(new Order({ ...base, items: items(1) }).validateSync()?.errors?.cancelledAt === undefined);
+  const validationError =
+    new Order({ ...base, items: items(1) }).validateSync();
+  assert.equal(validationError, undefined);
   assert.equal(new Order({ ...base, items: items(1) }).cancelledAt, null);
   assert.ok(new Order({ ...base, items: items(0) }).validateSync().errors.items);
   assert.ok(new Order({ ...base, items: items(MAX_CART_LINES + 1) }).validateSync().errors.items);
@@ -478,6 +521,16 @@ test("rotas de Order exigem autenticação", async () => {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = server.address().port;
   const response = await fetch(`http://127.0.0.1:${port}/api/users/me/orders`);
+  const cancelResponse = await fetch(
+    `http://127.0.0.1:${port}/api/users/me/orders/${productId}/cancel`,
+    { method: "PATCH" }
+  );
+  const statusAliasResponse = await fetch(
+    `http://127.0.0.1:${port}/api/users/me/orders/${productId}/status`,
+    { method: "PATCH" }
+  );
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   assert.equal(response.status, 401);
+  assert.equal(cancelResponse.status, 401);
+  assert.equal(statusAliasResponse.status, 404);
 });

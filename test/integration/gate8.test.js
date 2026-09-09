@@ -213,7 +213,12 @@ test("Mongo real materializa índices únicos e produz 11000 direto", async () =
 
   const user = await createUser("duplicate-user");
   await assert.rejects(
-    () => User.create({ ...user.toObject(), _id: undefined }),
+    () => User.create({
+      name: "Usuário duplicado",
+      email: user.email,
+      passwordHash: "hash-fixture",
+      role: "user"
+    }),
     duplicateKey
   );
 

@@ -13,6 +13,16 @@ jobs:
   quality-gate:
     name: quality-gate
     runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:8.0.29
+        ports:
+          - 27017/tcp
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,7 +30,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "24.x"
           cache: npm
 
       - name: Install dependencies
@@ -31,6 +41,24 @@ jobs:
 
       - name: Run regression tests
         run: npm test
+
+      - name: Start MongoDB health check
+        run: |
+          docker exec "${{ job.services.mongodb.id }}" \
+            mongosh --quiet --eval "db.adminCommand({ ping: 1 }).ok"
+
+      - name: Run real MongoDB integration tests
+        shell: bash
+        env:
+          APP_ENV: test
+          NODE_ENV: test
+          MONGO_URI: mongodb://127.0.0.1:${{ job.services.mongodb.ports['27017'] }}/tributasales_test_${{ github.run_id }}_${{ github.run_attempt }}
+          JWT_SECRET: tributasales-g8-integration-secret-0123456789
+        run: |
+          set -euo pipefail
+          NODE_OPTIONS="--test-reporter=tap" \
+            npm run test:integration | tee integration-test.tap
+          node scripts/verify-integration-tap.js integration-test.tap
 
       - name: Audit dependencies
         run: npm audit --audit-level=high

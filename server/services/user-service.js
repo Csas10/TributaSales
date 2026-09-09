@@ -1,6 +1,7 @@
 const User = require("../models/User");
 const { connectDatabase } = require("../config/database");
 const { NotFoundError } = require("../middleware/error-middleware");
+const { prepareModelIndexes } = require("../utils/model-index-readiness");
 const {
   normalizeEmail,
   normalizeObjectId,
@@ -33,6 +34,7 @@ class UserService {
   async create(payload) {
     const input = validateUserInput(payload);
     await this.connect();
+    await prepareModelIndexes(this.UserModel);
     try {
       const user = await this.UserModel.create({
         name: input.name,
@@ -60,6 +62,7 @@ class UserService {
   async findForAuthentication(email) {
     const normalizedEmail = normalizeEmail(email);
     await this.connect();
+    await prepareModelIndexes(this.UserModel);
     let query = this.UserModel.findOne({ email: normalizedEmail });
     if (query && typeof query.select === "function") {
       query = query.select("+passwordHash");

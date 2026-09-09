@@ -2,6 +2,7 @@ const Category = require("../models/Category");
 const Product = require("../models/Product");
 const { requireDatabase } = require("../config/database");
 const { NotFoundError } = require("../middleware/error-middleware");
+const { prepareModelIndexes } = require("../utils/model-index-readiness");
 const {
   normalizeObjectId,
   normalizeSlug,
@@ -43,6 +44,7 @@ class CategoryService {
   async create(payload) {
     const input = validateCategoryInput(payload);
     await this.connect();
+    await prepareModelIndexes(this.CategoryModel);
     try {
       return await this.CategoryModel.create({
         ...input,
@@ -60,6 +62,7 @@ class CategoryService {
     const categoryId = normalizeObjectId(id, "A categoria");
     const input = validateCategoryInput(payload);
     await this.connect();
+    await prepareModelIndexes(this.CategoryModel);
     try {
       const category = await this.CategoryModel.findOneAndUpdate(
         { _id: categoryId },
